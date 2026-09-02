@@ -1,6 +1,6 @@
 """SQLAlchemy persistence for the production deployment."""
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -24,7 +24,7 @@ class CacheRecord(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
     provider: Mapped[str] = mapped_column(String(255))
     cost: Mapped[float] = mapped_column(Numeric(14, 8), default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 class UsageEvent(Base):
@@ -37,7 +37,7 @@ class UsageEvent(Base):
     baseline_cost: Mapped[float] = mapped_column(Numeric(14, 8))
     saved: Mapped[float] = mapped_column(Numeric(14, 8))
     latency_ms: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 def initialize_database() -> None:
     Base.metadata.create_all(bind=engine)

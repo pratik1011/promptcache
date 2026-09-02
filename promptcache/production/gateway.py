@@ -49,16 +49,16 @@ def complete(request, tenant, settings, session):
     hit = cache.exact(tenant, cache_key) if caching else None
     semantic_score = None
     if hit is None and caching:
-        embedder = _get_embedder()
-        if embedder is not None:
-            try:
+        try:
+            embedder = _get_embedder()
+            if embedder is not None:
                 vector = embedder.embed(prompt)
                 match = next(((record, score) for record, score in cache.semantic(tenant, vector)
                               if record.provider == provider["id"] and float(score) >= settings.similarity_threshold), None)
                 if match: hit, semantic_score = match
-            except Exception:
-                logger.warning("semantic matching failed tenant=%s; falling back to exact cache", tenant)
-                vector = None
+        except Exception:
+            logger.warning("semantic matching failed tenant=%s; falling back to exact cache", tenant)
+            vector = None
     actual = 0.0
     if hit:
         response = copy.deepcopy(hit.response); baseline = float(hit.cost)
