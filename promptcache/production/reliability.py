@@ -5,7 +5,10 @@ from sqlalchemy import text
 DEFAULTS={'monthly_budget':100.0,'rate_limit_per_minute':60,'max_retries':1,'timeout_seconds':30}
 def get_policy(session,tenant_id:str)->dict:
  row=session.execute(text('SELECT monthly_budget,rate_limit_per_minute,max_retries,timeout_seconds FROM workspaces WHERE tenant_id=:tenant'),{'tenant':tenant_id}).mappings().first()
- if not row:return dict(DEFAULTS)
+ if not row:
+  # Tenants without a workspace row (e.g. the BOOTSTRAP_API_KEY tenant) get the
+  # defaults WITH the derived spend keys — enforce_budget/alerts read them.
+  return {**dict(DEFAULTS),'spent_this_month':0.0,'remaining_budget':float(DEFAULTS['monthly_budget'])}
  policy={key:(row[key] if row[key] is not None else value) for key,value in DEFAULTS.items()};policy['monthly_budget']=float(policy['monthly_budget'])
  month_start=datetime.now(UTC).replace(day=1,hour=0,minute=0,second=0,microsecond=0)
  spent=session.execute(text('SELECT coalesce(sum(actual_cost),0) FROM usage_events WHERE tenant_id=:tenant AND created_at>=:month_start'),{'tenant':tenant_id,'month_start':month_start}).scalar() or 0

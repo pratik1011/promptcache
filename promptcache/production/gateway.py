@@ -8,6 +8,7 @@ from sqlalchemy import text
 from ..cache.semantic import key, normalize_prompt
 from ..core.safety import contains_secret, pii_redaction_enabled, redact_pii
 from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
+from ..providers.protocol import upstream_body
 from ..providers.embeddings import build_embedding_provider
 from ..routing.router import select_provider
 from .circuit import breaker, next_delay
@@ -43,7 +44,10 @@ def complete(request, tenant, settings, session):
     start = time.monotonic()
     messages = request["messages"]; prompt = normalize_prompt(messages)
     provider, complexity = select_provider(messages, settings.providers, settings.routes, request.get("provider"))
-    context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature")}
+    # Tool calling / JSON mode change the output for an identical prompt, so the
+    # cache context must distinguish them (parity with the demo gateway).
+    context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature"),
+               "tools": repr(request.get("tools")), "response_format": repr(request.get("response_format"))}
     cache_key = key(prompt, request.get("cache_namespace", "default"), context)
     cache, usage = CacheRepository(session), UsageRepository(session)
     caching = bool(request.get("cache", True)) and not contains_secret(request)
@@ -77,7 +81,7 @@ def complete(request, tenant, settings, session):
                     last_error = RuntimeError(f"provider {candidate['id']} is temporarily open in the circuit breaker")
                     continue
                 try:
-                    response = call_provider(candidate, request)
+                    response = call_provider(candidate, upstream_body(request, candidate["model"]))
                     breaker.record_success(candidate["id"])
                     provider = candidate
                     break
@@ -110,7 +114,8 @@ def stream_complete(request, tenant, settings, session):
     start = time.monotonic()
     messages = request["messages"]; prompt = normalize_prompt(messages)
     provider, complexity = select_provider(messages, settings.providers, settings.routes, request.get("provider"))
-    context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature")}
+    context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature"),
+               "tools": repr(request.get("tools")), "response_format": repr(request.get("response_format"))}
     cache_key = key(prompt, request.get("cache_namespace", "default"), context)
     cache, usage = CacheRepository(session), UsageRepository(session)
     caching = bool(request.get("cache", True)) and not contains_secret(request)
@@ -135,7 +140,7 @@ def stream_complete(request, tenant, settings, session):
                 last_error = RuntimeError(f"provider {candidate['id']} is temporarily open in the circuit breaker")
                 continue
             try:
-                stream = stream_provider(candidate, request)
+                stream = stream_provider(candidate, upstream_body(request, candidate["model"], stream=True))
                 first = next(stream)
                 breaker.record_success(candidate["id"])
                 provider = candidate

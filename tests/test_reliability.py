@@ -12,6 +12,19 @@ class ReliabilityTests(unittest.TestCase):
  def test_zero_budget_means_uncapped(self):
   with patch.object(reliability,'get_policy',return_value={'monthly_budget':0,'spent_this_month':999}):
    self.assertEqual(reliability.enforce_budget(object(),'ws')['monthly_budget'],0)
+ def test_missing_workspace_row_includes_spend_keys(self):
+  '''Bootstrap tenants have an api_key but no workspaces row; the policy must
+  still carry spent_this_month/remaining_budget or enforce_budget KeyErrors.'''
+  from sqlalchemy import create_engine,text
+  from sqlalchemy.orm import Session
+  engine=create_engine('sqlite://')
+  with engine.begin() as conn:
+   conn.execute(text('CREATE TABLE workspaces (id INTEGER PRIMARY KEY, tenant_id TEXT, monthly_budget NUMERIC, rate_limit_per_minute INTEGER, max_retries INTEGER, timeout_seconds INTEGER)'))
+  with Session(engine) as session:
+   policy=reliability.enforce_budget(session,'ghost-tenant')
+  self.assertEqual(policy['spent_this_month'],0.0)
+  self.assertEqual(policy['remaining_budget'],100.0)
+  self.assertEqual(policy['monthly_budget'],100.0)
  def test_dynamic_rate_limit_overrides_default(self):
   limiter=RateLimiter(limit=100);limiter.client=MagicMock();pipe=MagicMock();pipe.execute.return_value=(6,30);pipe.__enter__.return_value=pipe;limiter.client.pipeline.return_value=pipe
   with self.assertRaises(RateLimitExceeded):limiter.check('ws',5)

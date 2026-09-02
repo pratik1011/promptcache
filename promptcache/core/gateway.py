@@ -5,6 +5,7 @@ from .safety import contains_secret
 from datetime import datetime,UTC
 from ..cache.semantic import find_match,key,normalize_prompt
 from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
+from ..providers.protocol import upstream_body
 from ..routing.router import select_provider
 
 def complete(body,settings,store):
@@ -17,7 +18,7 @@ def complete(body,settings,store):
  else:
   last_error=None
   for candidate in [provider]+[p for p in settings.providers if p["id"]!=provider["id"]]:
-   try: response=call_provider(candidate,body); provider=candidate; break
+   try: response=call_provider(candidate,upstream_body(body,candidate["model"])); provider=candidate; break
    except Exception as exc: last_error=exc
   else: raise RuntimeError(f"All configured providers failed: {last_error}")
   usage=response.get("usage",{}); p=usage.get("prompt_tokens",tokens(prompt)); o=usage.get("completion_tokens",tokens(response.get("choices",[{}])[0].get("message",{}).get("content",""))); actual=(p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6; baseline=(p*premium.get("inputCostPerMillion",0)+o*premium.get("outputCostPerMillion",0))/1e6; response["promptcache"]={"cached":False,"provider":provider["id"],"complexity":level}
@@ -49,7 +50,7 @@ def stream_complete(body,settings,store):
     stream=None;last_error=None
     for candidate in [provider]+[p for p in settings.providers if p["id"]!=provider["id"]]:
         try:
-            stream=stream_provider(candidate,body)
+            stream=stream_provider(candidate,upstream_body(body,candidate["model"],stream=True))
             first=next(stream)
             provider=candidate
             break

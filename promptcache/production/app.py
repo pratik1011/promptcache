@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, UTC
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from .db import SessionLocal, initialize_database
 from .gateway import complete as production_complete, stream_complete as production_stream_complete
@@ -54,7 +54,16 @@ app.add_middleware(
 # X-Request-ID on every response + structured access log (JSON when LOG_FORMAT=json).
 app.add_middleware(RequestIdMiddleware)
 class CompletionRequest(BaseModel):
- messages:list[dict]=Field(min_length=1); provider:str|None=None; temperature:float|None=None; cache:bool=True; cache_namespace:str="default"; stream:bool=False
+    # extra="allow": unknown OpenAI params (max_tokens, tools, response_format,
+    # stop, seed, ...) flow through model_dump() into the gateway instead of
+    # being silently dropped; gateway-only flags are stripped in upstream_body.
+    model_config = ConfigDict(extra="allow")
+    messages: list[dict] = Field(min_length=1)
+    provider: str | None = None
+    temperature: float | None = None
+    cache: bool = True
+    cache_namespace: str = "default"
+    stream: bool = False
 @app.on_event("startup")
 def startup():
  with SessionLocal() as session:
