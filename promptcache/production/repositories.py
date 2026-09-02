@@ -136,6 +136,12 @@ class CacheRepository:
         self.session.refresh(record)
         return record
 
+def purge_cache(session, tenant_id: str) -> int:
+    """Customer-facing cache purge: drop every cache entry for the tenant."""
+    deleted = session.execute(delete(CacheRecord).where(CacheRecord.tenant_id == tenant_id)).rowcount
+    session.commit()
+    return deleted
+
 class UsageRepository:
     def __init__(self, session):
         self.session = session

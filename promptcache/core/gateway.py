@@ -1,11 +1,10 @@
 import copy
-import json
 import time
 from .safety import contains_secret
 from datetime import datetime,UTC
 from ..cache.semantic import find_match,key,normalize_prompt
 from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
-from ..providers.protocol import upstream_body
+from ..providers.protocol import StreamCapture, upstream_body
 from ..routing.router import select_provider
 
 def complete(body,settings,store):
@@ -58,27 +57,20 @@ def stream_complete(body,settings,store):
             last_error=exc
             stream=None
     if stream is None: raise RuntimeError(f"All configured providers failed: {last_error}")
-    parts=[]
-    def _scan(chunk):
-        if chunk.startswith("data: ") and chunk!="data: [DONE]":
-            try: payload=json.loads(chunk[6:])
-            except ValueError: return
-            delta=payload.get("choices",[{}])[0].get("delta",{}).get("content","")
-            if delta: parts.append(delta)
-    yield first
-    _scan(first)
+    capture=StreamCapture()
+    yield first; capture.observe(first)
     for chunk in stream:
-        yield chunk
-        _scan(chunk)
-    content="".join(parts)
-    p=tokens(prompt);o=tokens(content)
+        yield chunk; capture.observe(chunk)
+    message=capture.snapshot_message(); content=message.get("content") or ""
+    reported=capture.usage or {}
+    p=reported.get("prompt_tokens") or tokens(prompt);o=reported.get("completion_tokens") or tokens(content)
     actual=(p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6
     premium=max(settings.providers,key=lambda x:x.get("inputCostPerMillion",0)+x.get("outputCostPerMillion",0))
     baseline=(p*premium.get("inputCostPerMillion",0)+o*premium.get("outputCostPerMillion",0))/1e6
     if body.get("cache",True) and not sensitive:
         store.add_cache({"key":key(prompt,namespace,context),"namespace":namespace,"prompt":prompt,"context":context,
             "response":{"id":f"chatcmpl-demo-{int(time.time()*1000)}","object":"chat.completion","model":provider.get("model"),
-                        "choices":[{"message":{"role":"assistant","content":content},"finish_reason":"stop"}]},
+                        "choices":[{"message":message,"finish_reason":capture.finish_reason or "stop"}]},
             "provider":provider["id"],"original_cost":actual,"created_at":time.time()})
     event={"timestamp":datetime.now(UTC).isoformat(),"cached":False,"provider":provider["id"],"sensitiveBypass":sensitive,"complexity":level,"actualCost":actual,"baselineCost":baseline,"saved":max(0,baseline-actual),"latencyMs":round((time.monotonic()-start)*1000)}
     store.add_event(event)

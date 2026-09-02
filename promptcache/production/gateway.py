@@ -1,5 +1,4 @@
 import copy
-import json
 import time
 from time import sleep
 import logging
@@ -8,7 +7,7 @@ from sqlalchemy import text
 from ..cache.semantic import key, normalize_prompt
 from ..core.safety import contains_secret, pii_redaction_enabled, redact_pii
 from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
-from ..providers.protocol import upstream_body
+from ..providers.protocol import StreamCapture, upstream_body
 from ..providers.embeddings import build_embedding_provider
 from ..routing.router import select_provider
 from .circuit import breaker, next_delay
@@ -155,20 +154,16 @@ def stream_complete(request, tenant, settings, session):
         if stream is not None:
             break
     if stream is None: raise RuntimeError(f"All configured providers failed: {last_error}")
-    parts = []
-    def _scan(chunk):
-        if chunk.startswith("data: ") and chunk!="data: [DONE]":
-            try: payload=json.loads(chunk[6:])
-            except ValueError: return
-            delta=payload.get("choices",[{}])[0].get("delta",{}).get("content","")
-            if delta: parts.append(delta)
+    capture = StreamCapture()
     yield first
-    _scan(first)
+    capture.observe(first)
     for chunk in stream:
         yield chunk
-        _scan(chunk)
-    content="".join(parts)
-    p=tokens(prompt);o=tokens(content)
+        capture.observe(chunk)
+    message = capture.snapshot_message()
+    content = message.get("content") or ""
+    reported = capture.usage or {}
+    p=reported.get("prompt_tokens") or tokens(prompt);o=reported.get("completion_tokens") or tokens(content)
     actual=(p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6
     premium=_baseline_provider(settings,session,tenant);baseline=(p*premium.get("inputCostPerMillion",0)+o*premium.get("outputCostPerMillion",0))/1e6
     if caching:
@@ -176,7 +171,7 @@ def stream_complete(request, tenant, settings, session):
             "id": f"chatcmpl-{tenant[:12]}-{int(time.monotonic() * 1000)}",
             "object": "chat.completion",
             "model": provider.get("model"),
-            "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "choices": [{"message": message, "finish_reason": capture.finish_reason or "stop"}],
             "usage": {"prompt_tokens": p, "completion_tokens": o, "total_tokens": p + o},
         }
         cache.save(tenant_id=tenant, cache_key=cache_key,

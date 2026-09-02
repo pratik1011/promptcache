@@ -11,6 +11,7 @@ from promptcache.core.gateway import stream_complete
 from promptcache.db.store import Store
 from promptcache.production.gateway import stream_complete as production_stream_complete
 from promptcache.providers.adapters import cache_chunks, stream_provider
+from promptcache.providers.protocol import StreamCapture
 
 PROVIDER = {"id": "demo", "type": "generic", "baseUrl": "mock://local", "model": "demo",
             "inputCostPerMillion": 1, "outputCostPerMillion": 2}
@@ -154,6 +155,74 @@ class ProductionStreamTests(unittest.TestCase):
         self.assertFalse(rows[0][0])
         self.assertTrue(rows[1][0])
         self.assertGreater(rows[1][1], 0)
+
+
+def _sse(payload) -> str:
+    return "data: " + json.dumps(payload) + "\n\n"
+
+
+class StreamCaptureTests(unittest.TestCase):
+    def test_content_and_finish_reason(self):
+        capture = StreamCapture()
+        capture.observe(_sse({"choices": [{"delta": {"content": "Hello "}, "finish_reason": None}]}))
+        capture.observe(_sse({"choices": [{"delta": {"content": "world"}, "finish_reason": None}]}))
+        capture.observe(_sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+        message = capture.snapshot_message()
+        self.assertEqual(message["content"], "Hello world")
+        self.assertEqual(capture.finish_reason, "stop")
+        self.assertNotIn("tool_calls", message)
+
+    def test_usage_only_chunk_is_safe_and_captures_usage(self):
+        capture = StreamCapture()
+        capture.observe(_sse({"choices": [{"delta": {"content": "Hi"}, "finish_reason": None}]}))
+        capture.observe(_sse({"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}))
+        capture.observe("data: [DONE]\n\n")
+        message = capture.snapshot_message()
+        self.assertEqual(message["content"], "Hi")
+        self.assertEqual(capture.usage, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+
+    def test_tool_calls_merge_across_deltas(self):
+        capture = StreamCapture()
+        capture.observe(_sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "type": "function",
+             "function": {"name": "get_weather", "arguments": '{"city":'}}]}, "finish_reason": None}]}))
+        capture.observe(_sse({"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '"Paris"}'}}]}, "finish_reason": None}]}))
+        capture.observe(_sse({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]}))
+        message = capture.snapshot_message()
+        call = message["tool_calls"][0]
+        self.assertEqual(call["id"], "call_1")
+        self.assertEqual(call["function"]["name"], "get_weather")
+        self.assertEqual(call["function"]["arguments"], '{"city":"Paris"}')
+        self.assertEqual(capture.finish_reason, "tool_calls")
+        self.assertIsNone(message["content"])
+
+    def test_malformed_lines_are_ignored(self):
+        capture = StreamCapture()
+        capture.observe("not an sse line")
+        capture.observe("data: {broken json")
+        capture.observe(_sse({"choices": [{"delta": {"content": "ok"}, "finish_reason": None}]}))
+        self.assertEqual(capture.snapshot_message()["content"], "ok")
+
+
+class ToolCallReplayTests(unittest.TestCase):
+    def test_cache_chunks_replays_tool_calls(self):
+        response = {"id": "chatcmpl-2", "object": "chat.completion", "model": "demo",
+                    "choices": [{"message": {"role": "assistant", "content": None,
+                                             "tool_calls": [{"id": "call_1", "type": "function",
+                                                             "function": {"name": "get_weather",
+                                                                          "arguments": '{"city":"Paris"}'}}]},
+                                 "finish_reason": "tool_calls"}]}
+        chunks = list(cache_chunks(response, ""))
+        self.assertEqual(chunks[-1], "data: [DONE]\n\n")
+        parsed = [json.loads(c[6:]) for c in chunks if c != "data: [DONE]\n\n"]
+        tool_chunks = [p for p in parsed if p["choices"][0]["delta"].get("tool_calls")]
+        self.assertEqual(len(tool_chunks), 1)
+        call = tool_chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+        self.assertEqual(call["function"]["name"], "get_weather")
+        self.assertEqual(call["index"], 0)
+        final = json.loads(chunks[-2][6:])
+        self.assertEqual(final["choices"][0]["finish_reason"], "tool_calls")
 
 
 if __name__ == "__main__":

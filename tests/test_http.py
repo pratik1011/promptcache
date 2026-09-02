@@ -212,6 +212,59 @@ class AppHttpTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertGreaterEqual(response.json()["requests"], 1)
 
+    def test_models_embeddings_and_cache_purge(self):
+        with self._patched_client() as client:
+            signup = client.post("/v1/auth/signup",
+                                 json={"email": "gateway@example.com", "password": "long-enough-password"})
+            token = signup.json()["access_token"]
+            ws = client.post("/v1/workspaces", json={"name": "Gateway"},
+                             headers={"Authorization": f"Bearer {token}"}).json()
+            api_key = ws["api_key"]
+
+            response = client.get("/v1/models")
+            self.assertEqual(response.status_code, 200)
+            models = response.json()
+            self.assertEqual(models["object"], "list")
+            self.assertIn("demo", [model["id"] for model in models["data"]])
+
+            response = client.post("/v1/embeddings", json={"input": "hello world"},
+                                   headers={"Authorization": f"Bearer {api_key}"})
+            self.assertEqual(response.status_code, 200)
+            body = response.json()
+            self.assertEqual(body["object"], "list")
+            self.assertEqual(body["data"][0]["object"], "embedding")
+            self.assertEqual(len(body["data"][0]["embedding"]), 3)
+
+            completion = client.post("/v1/chat/completions",
+                                     json={"messages": [{"role": "user", "content": "Cache me"}]},
+                                     headers={"Authorization": f"Bearer {api_key}"})
+            self.assertEqual(completion.status_code, 200)
+            self.assertFalse(completion.json()["promptcache"]["cached"])
+
+            response = client.post("/v1/cache/purge", headers={"Authorization": f"Bearer {api_key}"})
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["purged"])
+            self.assertGreaterEqual(response.json()["deleted"], 1)
+
+            replay = client.post("/v1/chat/completions",
+                                 json={"messages": [{"role": "user", "content": "Cache me"}]},
+                                 headers={"Authorization": f"Bearer {api_key}"})
+            self.assertEqual(replay.status_code, 200)
+            # The entry was purged, so the identical prompt must be a fresh miss.
+            self.assertFalse(replay.json()["promptcache"]["cached"])
+
+            recached = client.post("/v1/chat/completions",
+                                   json={"messages": [{"role": "user", "content": "Cache me"}]},
+                                   headers={"Authorization": f"Bearer {api_key}"})
+            self.assertEqual(recached.status_code, 200)
+            # And the replay itself re-populated the cache.
+            self.assertTrue(recached.json()["promptcache"]["cached"])
+
+    def test_cache_purge_requires_auth(self):
+        with self._patched_client() as client:
+            response = client.post("/v1/cache/purge")
+            self.assertEqual(response.status_code, 401)
+
     def test_metrics_rejects_bad_key(self):
         with self._patched_client() as client:
             response = client.get("/v1/metrics", headers={"Authorization": "Bearer pc_nope"})

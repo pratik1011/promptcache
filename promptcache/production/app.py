@@ -14,10 +14,12 @@ from .auth import authenticate, bootstrap, create_key, revoke_key, revoke_all_ke
 from .accounts import signup, login, current_user, create_workspace
 from .config import jwt_secret
 import hmac
-from .repositories import UsageRepository, prune_expired
+from .repositories import UsageRepository, prune_expired, purge_cache
 from .billing import (apply_event, billing_summary, checkout, enforce_request_limit,
                       enforce_workspace_limit, portal, user_id_from_token, verify_webhook)
-from .provider_connections import PRESETS, delete_connection, list_connections, save_connection, test_values
+from .provider_connections import (PRESETS, delete_connection, list_connections,
+                                   save_connection, test_values)
+from ..providers.adapters import embed_provider
 from .reliability import enforce_budget, get_policy, update_policy
 from ..config.settings import load_settings
 from .audit import list_audit, record_audit
@@ -109,6 +111,37 @@ def completions(request:CompletionRequest, authorization:str|None=Header(default
  except HTTPException: raise
  except Exception as exc:
   logger.exception("completion_failed tenant=%s",t); raise HTTPException(502,f"Provider gateway error: {exc}") from exc
+@app.get("/v1/models")
+def list_models():
+    """OpenAI-compatible model listing built from the configured providers."""
+    seen: dict[str, dict] = {}
+    for provider in settings.providers:
+        model = provider.get("model")
+        if model and model not in seen:
+            seen[model] = {"id": model, "object": "model", "owned_by": provider.get("id", "promptcache")}
+    return {"object": "list", "data": list(seen.values())}
+
+class EmbeddingsRequest(BaseModel):
+    input: str | list[str] = Field(min_length=1)
+    model: str | None = None
+
+@app.post("/v1/embeddings")
+def embeddings(request: EmbeddingsRequest, authorization: str | None = Header(default=None)):
+    """OpenAI-compatible embeddings endpoint proxied to the configured provider."""
+    tenant(authorization)
+    if not settings.providers:
+        raise HTTPException(503, "No providers configured")
+    provider = next((p for p in settings.providers if p.get("model") == request.model), settings.providers[0])
+    return embed_provider(provider, {"input": request.input})
+
+@app.post("/v1/cache/purge")
+def purge_workspace_cache(authorization: str | None = Header(default=None)):
+    """Invalidate every cached response for the authenticated workspace."""
+    t = tenant(authorization)
+    with SessionLocal() as session:
+        deleted = purge_cache(session, t)
+    return {"purged": True, "deleted": deleted}
+
 @app.get("/v1/metrics")
 def metrics(authorization:str|None=Header(default=None)):
  t=tenant(authorization)
