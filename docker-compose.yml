@@ -1,0 +1,43 @@
+﻿services:
+  api:
+    build: .
+    ports: ["127.0.0.1:8787:8787"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://promptcache:promptcache-dev@postgres:5432/promptcache
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    ports: ["127.0.0.1:5173:80"]
+    depends_on:
+      api: { condition: service_started }
+    restart: unless-stopped
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: promptcache
+      POSTGRES_USER: promptcache
+      POSTGRES_PASSWORD: promptcache-dev
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["promptcache-postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U promptcache -d promptcache"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["promptcache-redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  promptcache-postgres:
+  promptcache-redis:

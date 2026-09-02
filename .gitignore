@@ -1,0 +1,25 @@
+.env
+.data/
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Scratch / one-off analysis files
+_build_check.txt
+_css_grep.txt
+_w4d.py
+_w4e.py
+_*.txt
+_*.py
+
+# Build output
+dist/
+*.tsbuildinfo
+
