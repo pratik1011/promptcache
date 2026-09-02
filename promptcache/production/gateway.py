@@ -1,14 +1,16 @@
 import copy
 import json
 import time
+from time import sleep
 import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from ..cache.semantic import key, normalize_prompt
 from ..core.safety import contains_secret
-from ..providers.adapters import call_provider, stream_provider, tokens
+from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
 from ..providers.embeddings import build_embedding_provider
 from ..routing.router import select_provider
+from .circuit import breaker, next_delay
 from .repositories import CacheRepository, UsageRepository
 from .provider_connections import runtime_settings
 logger = logging.getLogger("promptcache")
@@ -65,9 +67,27 @@ def complete(request, tenant, settings, session):
         response["promptcache"] = {"cached": True, "match": "semantic" if semantic_score is not None else "exact", "similarity": float(semantic_score) if semantic_score is not None else 1.0, "provider": hit.provider, "complexity": complexity}
     else:
         response = None; last_error = None
-        for candidate in [item for p in [provider]+[p for p in settings.providers if p['id']!=provider['id']] for item in [p]*(settings.max_retries+1)]:
-            try: response = call_provider(candidate, request); provider = candidate; break
-            except Exception as exc: last_error = exc
+        candidates = [provider] + [p for p in settings.providers if p['id'] != provider['id']]
+        attempts = int(settings.max_retries) + 1
+        generation = 0
+        for candidate in candidates:
+            for retry in range(attempts):
+                if not breaker.allow(candidate["id"]):
+                    last_error = RuntimeError(f"provider {candidate['id']} is temporarily open in the circuit breaker")
+                    continue
+                try:
+                    response = call_provider(candidate, request)
+                    breaker.record_success(candidate["id"])
+                    provider = candidate
+                    break
+                except Exception as exc:
+                    breaker.record_failure(candidate["id"])
+                    last_error = exc
+                    if generation < len(candidates) * attempts - 1:
+                        sleep(next_delay(retry))
+                generation += 1
+            if response is not None:
+                break
         if response is None: raise RuntimeError(f"All configured providers failed: {last_error}")
         u = response.get("usage", {}); p = u.get("prompt_tokens", tokens(prompt)); o = u.get("completion_tokens", tokens(response.get("choices", [{}])[0].get("message", {}).get("content", "")))
         actual = (p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6
@@ -78,27 +98,58 @@ def complete(request, tenant, settings, session):
 
 
 def stream_complete(request, tenant, settings, session):
-    """SSE passthrough for stream:true requests.
+    """SSE passthrough for stream:true requests with exact-cache replay.
 
-    Streaming bypasses the cache in both directions; usage is still recorded
-    from the accumulated response text once the stream ends."""
-    settings=runtime_settings(session,tenant,settings)
-    start=time.monotonic()
-    messages=request["messages"];prompt=normalize_prompt(messages)
-    provider,complexity=select_provider(messages,settings.providers,settings.routes,request.get("provider"))
-    usage=UsageRepository(session)
-    stream=None;last_error=None
-    for candidate in [item for p in [provider]+[p for p in settings.providers if p['id']!=provider['id']] for item in [p]*(settings.max_retries+1)]:
-        try:
-            stream=stream_provider(candidate,request)
-            first=next(stream)
-            provider=candidate
+    A cached answer for an identical prompt is replayed as SSE and billed as a
+    cache hit (no upstream call). Misses stream from the provider with
+    breaker/backoff and are stored for exact-match reuse; streams avoid
+    computing embeddings so the saved entry is exact-lookup only.
+    """
+    settings = runtime_settings(session, tenant, settings)
+    start = time.monotonic()
+    messages = request["messages"]; prompt = normalize_prompt(messages)
+    provider, complexity = select_provider(messages, settings.providers, settings.routes, request.get("provider"))
+    context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature")}
+    cache_key = key(prompt, request.get("cache_namespace", "default"), context)
+    cache, usage = CacheRepository(session), UsageRepository(session)
+    caching = bool(request.get("cache", True)) and not contains_secret(request)
+    hit = cache.exact(tenant, cache_key) if caching else None
+    if hit:
+        content = (hit.response or {}).get("choices", [{}])[0].get("message", {}).get("content", "")
+        for chunk in cache_chunks(hit.response or {}, content):
+            yield chunk
+        baseline = float(hit.cost)
+        event = {"tenant_id": tenant, "provider": hit.provider, "cached": True,
+                 "actual_cost": 0.0, "baseline_cost": baseline, "saved": baseline,
+                 "latency_ms": round((time.monotonic() - start) * 1000)}
+        usage.record(**event)
+        return
+    stream = None; last_error = None
+    candidates = [provider] + [p for p in settings.providers if p['id'] != provider['id']]
+    attempts = int(settings.max_retries) + 1
+    generation = 0
+    for candidate in candidates:
+        for retry in range(attempts):
+            if not breaker.allow(candidate["id"]):
+                last_error = RuntimeError(f"provider {candidate['id']} is temporarily open in the circuit breaker")
+                continue
+            try:
+                stream = stream_provider(candidate, request)
+                first = next(stream)
+                breaker.record_success(candidate["id"])
+                provider = candidate
+                break
+            except Exception as exc:
+                breaker.record_failure(candidate["id"])
+                last_error = exc
+                stream = None
+                if generation < len(candidates) * attempts - 1:
+                    sleep(next_delay(retry))
+            generation += 1
+        if stream is not None:
             break
-        except Exception as exc:
-            last_error=exc
-            stream=None
     if stream is None: raise RuntimeError(f"All configured providers failed: {last_error}")
-    parts=[]
+    parts = []
     def _scan(chunk):
         if chunk.startswith("data: ") and chunk!="data: [DONE]":
             try: payload=json.loads(chunk[6:])
@@ -114,5 +165,16 @@ def stream_complete(request, tenant, settings, session):
     p=tokens(prompt);o=tokens(content)
     actual=(p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6
     premium=_baseline_provider(settings,session,tenant);baseline=(p*premium.get("inputCostPerMillion",0)+o*premium.get("outputCostPerMillion",0))/1e6
+    if caching:
+        cached_response = {
+            "id": f"chatcmpl-{tenant[:12]}-{int(time.monotonic() * 1000)}",
+            "object": "chat.completion",
+            "model": provider.get("model"),
+            "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": p, "completion_tokens": o, "total_tokens": p + o},
+        }
+        cache.save(tenant_id=tenant, cache_key=cache_key, prompt=prompt,
+                   response=cached_response, embedding=None, provider=provider["id"], cost=actual,
+                   expires_at=datetime.now(timezone.utc)+timedelta(seconds=settings.cache_ttl_seconds))
     event={"tenant_id":tenant,"provider":provider["id"],"cached":False,"actual_cost":actual,"baseline_cost":baseline,"saved":max(0,baseline-actual),"latency_ms":round((time.monotonic()-start)*1000)}
     usage.record(**event)

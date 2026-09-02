@@ -42,9 +42,11 @@ def billing_summary(session, user_id: int) -> dict:
         raise HTTPException(404, 'User not found')
     plan_id = user['plan'] if user['plan'] in PLANS else 'developer'
     plan = PLANS[plan_id]
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     usage = session.execute(text('''SELECT count(*) FROM usage_events e JOIN workspaces w
         ON w.tenant_id=e.tenant_id WHERE w.owner_id=:id
-        AND e.created_at >= date_trunc('month', now())'''), {'id': user_id}).scalar() or 0
+        AND e.created_at >= :month_start'''), {'id': user_id, 'month_start': month_start}).scalar() or 0
     workspace_count = session.execute(text('SELECT count(*) FROM workspaces WHERE owner_id=:id'), {'id': user_id}).scalar() or 0
     return {
         'plan': plan_id, 'plan_name': plan['name'], 'status': user['subscription_status'] or 'free',

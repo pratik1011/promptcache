@@ -28,3 +28,16 @@ def stream_provider(provider, body):
         for raw in response:
             line=raw.decode("utf-8",errors="replace").strip()
             if line: yield line+"\n\n"
+
+def cache_chunks(response: dict, content: str):
+    """Yield SSE data lines replaying a stored chat completion response."""
+    chunk_id = response.get("id") or "chatcmpl-simulated"
+    model = response.get("model") or "assistant"
+    for word in (content or "").split():
+        piece = {"id": chunk_id, "object": "chat.completion.chunk", "model": model,
+                 "choices": [{"delta": {"content": word + " "}, "finish_reason": None}]}
+        yield "data: " + json.dumps(piece) + "\n\n"
+    final = {"id": chunk_id, "object": "chat.completion.chunk", "model": model,
+             "choices": [{"delta": {}, "finish_reason": "stop"}]}
+    yield "data: " + json.dumps(final) + "\n\n"
+    yield "data: [DONE]\n\n"

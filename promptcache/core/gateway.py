@@ -2,7 +2,7 @@ import copy,json,time
 from .safety import contains_secret
 from datetime import datetime,timezone
 from ..cache.semantic import find_match,key,normalize_prompt
-from ..providers.adapters import call_provider,stream_provider,tokens
+from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
 from ..routing.router import select_provider
 
 def complete(body,settings,store):
@@ -25,15 +25,25 @@ def complete(body,settings,store):
 
 
 def stream_complete(body,settings,store):
-    """SSE passthrough for stream:true requests.
+    """SSE passthrough for stream:true requests with cache replay.
 
-    Streaming bypasses the cache in both directions; usage is still recorded
-    from the accumulated response text once the stream ends."""
+    Cached responses are replayed as SSE and billed as cache hits. Misses
+    stream from the provider and are stored for exact/semantic reuse once the
+    stream ends, so repeated identical stream requests stop paying upstream."""
     messages=body.get("messages")
     if not isinstance(messages,list) or not messages: raise ValueError("messages must be a non-empty array")
-    start=time.monotonic()
+    start=time.monotonic(); sensitive=contains_secret(body); namespace=body.get("cache_namespace","default")
     prompt=normalize_prompt(messages)
     provider,level=select_provider(messages,settings.providers,settings.routes,body.get("provider"))
+    context={"provider":provider["id"],"model":provider.get("model"),"temperature":body.get("temperature"),"tools":repr(body.get("tools")),"response_format":repr(body.get("response_format"))}
+    match=find_match(store.state["cache"],prompt,namespace,settings.similarity_threshold,settings.cache_ttl_seconds,context) if body.get("cache",True) and not sensitive else None
+    if match:
+        entry,score,kind=match
+        content=entry["response"].get("choices",[{}])[0].get("message",{}).get("content","")
+        for chunk in cache_chunks(entry["response"],content): yield chunk
+        baseline=float(entry["original_cost"])
+        store.add_event({"timestamp":datetime.now(timezone.utc).isoformat(),"cached":True,"provider":entry["provider"],"sensitiveBypass":sensitive,"complexity":level,"actualCost":0,"baselineCost":baseline,"saved":baseline,"latencyMs":round((time.monotonic()-start)*1000)})
+        return
     stream=None;last_error=None
     for candidate in [provider]+[p for p in settings.providers if p["id"]!=provider["id"]]:
         try:
@@ -62,5 +72,10 @@ def stream_complete(body,settings,store):
     actual=(p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6
     premium=max(settings.providers,key=lambda x:x.get("inputCostPerMillion",0)+x.get("outputCostPerMillion",0))
     baseline=(p*premium.get("inputCostPerMillion",0)+o*premium.get("outputCostPerMillion",0))/1e6
-    event={"timestamp":datetime.now(timezone.utc).isoformat(),"cached":False,"provider":provider["id"],"sensitiveBypass":False,"complexity":level,"actualCost":actual,"baselineCost":baseline,"saved":max(0,baseline-actual),"latencyMs":round((time.monotonic()-start)*1000)}
+    if body.get("cache",True) and not sensitive:
+        store.add_cache({"key":key(prompt,namespace,context),"namespace":namespace,"prompt":prompt,"context":context,
+            "response":{"id":f"chatcmpl-demo-{int(time.time()*1000)}","object":"chat.completion","model":provider.get("model"),
+                        "choices":[{"message":{"role":"assistant","content":content},"finish_reason":"stop"}]},
+            "provider":provider["id"],"original_cost":actual,"created_at":time.time()})
+    event={"timestamp":datetime.now(timezone.utc).isoformat(),"cached":False,"provider":provider["id"],"sensitiveBypass":sensitive,"complexity":level,"actualCost":actual,"baselineCost":baseline,"saved":max(0,baseline-actual),"latencyMs":round((time.monotonic()-start)*1000)}
     store.add_event(event)
