@@ -4,4 +4,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8787
-CMD ["uvicorn", "promptcache.production.app:app", "--host", "0.0.0.0", "--port", "8787"]
+# Apply database migrations (stamp-first for pre-Alembic databases), then serve.
+CMD ["sh", "-c", "python -m promptcache.production.migrate && exec uvicorn promptcache.production.app:app --host 0.0.0.0 --port 8787"]
