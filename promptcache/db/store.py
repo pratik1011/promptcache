@@ -1,8 +1,11 @@
-import json, os, threading
+import json
+import os
+import threading
 from collections import defaultdict
+from typing import Any
 class Store:
     def __init__(self,path):
-        self.path=os.path.abspath(path); self.lock=threading.Lock(); self.state={"cache":[],"events":[]}
+        self.path=os.path.abspath(path); self.lock=threading.Lock(); self.state: dict[str, Any] = {"cache":[],"events":[]}
         if os.path.exists(self.path):
             with open(self.path,encoding="utf8") as f: self.state=json.load(f)
     def _save(self):
@@ -14,7 +17,7 @@ class Store:
     def add_event(self,e):
         with self.lock: self.state["events"]=(self.state["events"]+[e])[-50000:]; self._save()
     def metrics(self):
-        t={"requests":0,"cacheHits":0,"actualCost":0.0,"baselineCost":0.0,"saved":0.0,"latencyMs":0}; days=defaultdict(lambda:{"requests":0,"saved":0.0,"actualCost":0.0})
+        t: dict[str, Any] = {"requests":0,"cacheHits":0,"actualCost":0.0,"baselineCost":0.0,"saved":0.0,"latencyMs":0}; days: defaultdict[str, dict[str, float]] = defaultdict(lambda:{"requests":0,"saved":0.0,"actualCost":0.0})
         for e in self.state["events"]:
             t["requests"]+=1;t["cacheHits"]+=int(e["cached"])
             for k in ("actualCost","baselineCost","saved","latencyMs"): t[k]+=e[k]

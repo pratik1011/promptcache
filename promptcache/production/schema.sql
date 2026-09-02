@@ -28,6 +28,34 @@ CREATE INDEX IF NOT EXISTS usage_events_tenant_date_idx ON usage_events (tenant_
 CREATE INDEX IF NOT EXISTS cache_records_expires_idx ON cache_records (expires_at);
 CREATE INDEX IF NOT EXISTS usage_events_created_idx ON usage_events (created_at);
 
+-- Pre-aggregated daily usage powering /v1/metrics without scanning the ledger.
+CREATE TABLE IF NOT EXISTS daily_usage_rollups (
+  tenant_id TEXT NOT NULL,
+  day DATE NOT NULL,
+  provider TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  cache_hits INTEGER NOT NULL DEFAULT 0,
+  actual_cost NUMERIC(14,8) NOT NULL DEFAULT 0,
+  baseline_cost NUMERIC(14,8) NOT NULL DEFAULT 0,
+  saved NUMERIC(14,8) NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, day, provider)
+);
+CREATE TABLE IF NOT EXISTS usage_rollup_state (
+  tenant_id TEXT PRIMARY KEY,
+  last_event_id BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS daily_usage_rollups_tenant_day_idx ON daily_usage_rollups (tenant_id, day);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id TEXT,
+  user_id BIGINT,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS audit_log_tenant_idx ON audit_log (tenant_id, id DESC);
+
 CREATE TABLE IF NOT EXISTS api_keys (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,

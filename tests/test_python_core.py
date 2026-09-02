@@ -1,4 +1,5 @@
-import tempfile, unittest
+import tempfile
+import unittest
 from promptcache.cache.semantic import normalize_prompt, similarity
 from promptcache.db.store import Store
 from promptcache.config.settings import Settings

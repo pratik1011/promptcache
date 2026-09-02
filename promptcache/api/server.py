@@ -1,10 +1,15 @@
-import json,os,re,hashlib,hmac,secrets
+import json
+import os
+import re
+import hashlib
+import hmac
+import secrets
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from ..config.settings import load_settings
 from ..core.gateway import complete, stream_complete
 from ..db.store import Store
 settings=load_settings();store=Store(settings.data_file); public=os.path.abspath(os.path.join(os.path.dirname(__file__),"..","..","public","index.html"))
-_USERS={};_TENANTS={}
+_USERS: dict[str, dict] = {}; _TENANTS: dict[str, dict] = {}
 _CORS_ALLOW_ORIGIN=os.environ.get("CORS_ALLOW_ORIGIN","*")
 class Handler(BaseHTTPRequestHandler):
  def _cors_headers(self):
@@ -13,7 +18,7 @@ class Handler(BaseHTTPRequestHandler):
   self.send_header("Access-Control-Allow-Headers","Content-Type,Authorization")
   self.send_header("Access-Control-Max-Age","86400")
  def send_json(self,status,payload,ctype="application/json"):
-  data=payload.encode() if isinstance(payload,str) else json.dumps(payload).encode();self.send_response(status);self.send_header("Content-Type",ctype);self.send_header("Content-Length",len(data));self._cors_headers();self.end_headers();self.wfile.write(data)
+  data=payload.encode() if isinstance(payload,str) else json.dumps(payload).encode();self.send_response(status);self.send_header("Content-Type",ctype);self.send_header("Content-Length",str(len(data)));self._cors_headers();self.end_headers();self.wfile.write(data)
  def do_OPTIONS(self):
   self.send_response(204);self._cors_headers();self.end_headers()
  def auth(self):return settings.api_key=="development-only" or self.headers.get("Authorization")==f"Bearer {settings.api_key}"

@@ -1,10 +1,12 @@
-import json,time,urllib.request
+import json
+import time
+import urllib.request
 def tokens(text): return max(1,(len(str(text))+3)//4)
 def call_provider(provider,body):
     if provider.get("baseUrl","").startswith("mock://"):
         text=next((m.get("content","") for m in body["messages"][::-1] if m.get("role")=="user"),""); n=tokens(json.dumps(body["messages"]))
         return {"id":f"mock-{int(time.time())}","object":"chat.completion","model":provider["model"],"choices":[{"message":{"role":"assistant","content":f"Demo response for: {text}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":n,"completion_tokens":8,"total_tokens":n+8}}
-    headers={"content-type":"application/json",**provider.get("headers",{})};
+    headers={"content-type":"application/json",**provider.get("headers",{})}
     if provider.get("apiKey"): headers["authorization"]=f"Bearer {provider['apiKey']}"
     request=urllib.request.Request(provider.get("endpoint",provider["baseUrl"].rstrip("/")+"/chat/completions"),data=json.dumps({**body,"model":provider["model"]}).encode(),headers=headers,method="POST")
     with urllib.request.urlopen(request,timeout=provider.get('timeoutSeconds',30)) as response:return json.loads(response.read())

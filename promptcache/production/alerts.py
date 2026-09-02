@@ -1,8 +1,9 @@
 '''Workspace alert policies and in-app notifications.'''
-import ipaddress,socket
+import ipaddress
+import socket
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime,timedelta,timezone
+from datetime import datetime,timedelta,UTC
 from urllib.parse import urlparse
 import httpx
 from sqlalchemy import text
@@ -47,7 +48,7 @@ def _post_webhook(webhook:str,title:str,message:str)->None:
   logger.warning("alert webhook delivery failed for %s",webhook)
 
 def _notify(session,tenant_id:str,kind:str,title:str,message:str,severity:str,webhook:str|None):
- recent=session.execute(text('SELECT 1 FROM notifications WHERE tenant_id=:tenant AND kind=:kind AND created_at>:since'),{'tenant':tenant_id,'kind':kind,'since':datetime.now(timezone.utc)-timedelta(hours=1)}).first()
+ recent=session.execute(text('SELECT 1 FROM notifications WHERE tenant_id=:tenant AND kind=:kind AND created_at>:since'),{'tenant':tenant_id,'kind':kind,'since':datetime.now(UTC)-timedelta(hours=1)}).first()
  if recent:return
  session.execute(text('INSERT INTO notifications(tenant_id,kind,title,message,severity) VALUES (:tenant,:kind,:title,:message,:severity)'),{'tenant':tenant_id,'kind':kind,'title':title,'message':message,'severity':severity});session.commit()
  if webhook:

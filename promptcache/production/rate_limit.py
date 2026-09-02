@@ -18,7 +18,8 @@ class RateLimiter:
         self.limit = limit if limit is not None else int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
         self.window_seconds = window_seconds
         self.name = name
-        self.client = Redis.from_url(url or os.getenv("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True)
+        resolved_url = url or os.getenv("REDIS_URL") or "redis://localhost:6379/0"
+        self.client = Redis.from_url(resolved_url, decode_responses=True)
 
     def check(self, tenant: str, limit: int | None = None) -> None:
         key = f"promptcache:rate:{self.name}:{tenant}"

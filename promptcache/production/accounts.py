@@ -1,4 +1,10 @@
-import hashlib, hmac, os, secrets
+import hashlib
+import hmac
+import secrets
+from datetime import datetime, timedelta, UTC
+
+import jwt
+
 from sqlalchemy import text
 from .config import jwt_secret
 
@@ -18,13 +24,11 @@ def create_workspace(session, user_id: int, name: str) -> tuple[str, str, str]:
     from .auth import create_key
     raw_key, expires_at = create_key(session, tenant)
     return tenant, raw_key, expires_at.isoformat()
-import jwt
-from datetime import datetime, timedelta, timezone
 
 def login(session, email: str, password: str) -> str:
     row=session.execute(text("SELECT id,password_hash FROM users WHERE email=:email"),{"email":email.lower().strip()}).mappings().first()
     if not row or not verify_password(password,row["password_hash"]): raise ValueError("Invalid credentials")
-    return jwt.encode({"sub":str(row["id"]),"exp":datetime.now(timezone.utc)+timedelta(hours=8)},jwt_secret(),algorithm="HS256")
+    return jwt.encode({"sub":str(row["id"]),"exp":datetime.now(UTC)+timedelta(hours=8)},jwt_secret(),algorithm="HS256")
 def current_user(session, token: str):
     payload=jwt.decode(token,jwt_secret(),algorithms=["HS256"])
     return session.execute(text("SELECT u.email,w.name,w.tenant_id FROM users u LEFT JOIN workspaces w ON w.owner_id=u.id WHERE u.id=:id"),{"id":int(payload["sub"])}).mappings().all()

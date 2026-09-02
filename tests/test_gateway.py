@@ -1,5 +1,4 @@
 """Gateway resilience: embedding outages, retry backoff, and circuit breakers."""
-import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch

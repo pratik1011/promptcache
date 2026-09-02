@@ -4,7 +4,7 @@ import hmac
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 
 import httpx
 import jwt
@@ -35,6 +35,25 @@ def stripe_enabled() -> bool:
 def price_id(plan: str) -> str:
     return os.getenv(f'STRIPE_PRICE_{plan.upper()}', '')
 
+def savings_fee_summary(session, user_id: int) -> dict:
+    """Usage-based pricing: a share of verified monthly savings as the platform fee.
+
+    SAVINGS_SHARE_PERCENT sets the percentage (0 disables the fee);
+    PLATFORM_FEE_CAP optionally ceilings the monthly charge in USD.
+    """
+    share = float(os.getenv('SAVINGS_SHARE_PERCENT', '10') or 0)
+    cap = float(os.getenv('PLATFORM_FEE_CAP', '0') or 0)
+    now = datetime.now(UTC)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    saved = session.execute(text('''SELECT coalesce(sum(e.saved),0) FROM usage_events e JOIN workspaces w
+        ON w.tenant_id=e.tenant_id WHERE w.owner_id=:id AND e.created_at >= :month_start'''),
+        {'id': user_id, 'month_start': month_start}).scalar() or 0
+    fee = float(saved) * share / 100.0
+    if cap > 0:
+        fee = min(fee, cap)
+    return {'savings_this_month': float(saved), 'savings_share_percent': share,
+            'platform_fee': round(fee, 2), 'platform_fee_cap': cap or None}
+
 def billing_summary(session, user_id: int) -> dict:
     user = session.execute(text('''SELECT email, plan, subscription_status,
         stripe_customer_id, current_period_end FROM users WHERE id=:id'''), {'id': user_id}).mappings().first()
@@ -42,7 +61,7 @@ def billing_summary(session, user_id: int) -> dict:
         raise HTTPException(404, 'User not found')
     plan_id = user['plan'] if user['plan'] in PLANS else 'developer'
     plan = PLANS[plan_id]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     usage = session.execute(text('''SELECT count(*) FROM usage_events e JOIN workspaces w
         ON w.tenant_id=e.tenant_id WHERE w.owner_id=:id
@@ -54,6 +73,7 @@ def billing_summary(session, user_id: int) -> dict:
         'workspaces_used': workspace_count, 'workspaces_limit': plan['workspaces'],
         'current_period_end': user['current_period_end'].isoformat() if user['current_period_end'] else None,
         'stripe_enabled': stripe_enabled(), 'has_billing_account': bool(user['stripe_customer_id']),
+        'savings_fee': savings_fee_summary(session, user_id),
         'plans': [{**value, 'id': key, 'configured': key == 'developer' or bool(price_id(key))} for key, value in PLANS.items()],
     }
 
@@ -130,7 +150,7 @@ def apply_event(session, event: dict) -> None:
             status = obj.get('status', 'inactive')
             plan = metadata.get('plan', 'developer') if status in ('active', 'trialing') else 'developer'
             period = obj.get('current_period_end')
-            period_dt = datetime.fromtimestamp(period, timezone.utc) if period else None
+            period_dt = datetime.fromtimestamp(period, UTC) if period else None
             session.execute(text('''UPDATE users SET plan=:plan, subscription_status=:status,
                 stripe_customer_id=:customer, stripe_subscription_id=:subscription,
                 current_period_end=:period WHERE id=:id'''), {'plan': plan, 'status': status,

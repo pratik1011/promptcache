@@ -1,4 +1,7 @@
-import base64, os, secrets, unittest
+import base64
+import os
+import secrets
+import unittest
 from unittest.mock import patch
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session

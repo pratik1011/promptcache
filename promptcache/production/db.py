@@ -1,7 +1,8 @@
 """SQLAlchemy persistence for the production deployment."""
+import logging
 import os
-from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text, create_engine, text
+from datetime import date, datetime, UTC
+from sqlalchemy import JSON, Boolean, Date, DateTime, Integer, Numeric, String, Text, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from pgvector.sqlalchemy import Vector
@@ -24,7 +25,7 @@ class CacheRecord(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(384), nullable=True)
     provider: Mapped[str] = mapped_column(String(255))
     cost: Mapped[float] = mapped_column(Numeric(14, 8), default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 class UsageEvent(Base):
@@ -37,7 +38,42 @@ class UsageEvent(Base):
     baseline_cost: Mapped[float] = mapped_column(Numeric(14, 8))
     saved: Mapped[float] = mapped_column(Numeric(14, 8))
     latency_ms: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+class DailyUsageRollup(Base):
+    """Pre-aggregated per-tenant, per-day, per-provider usage.
+
+    /v1/metrics reads this table for everything before today and queries
+    usage_events only for today's live rows, keeping the dashboard fast
+    regardless of ledger size.
+    """
+    __tablename__ = "daily_usage_rollups"
+    tenant_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(255), primary_key=True)
+    requests: Mapped[int] = mapped_column(Integer, default=0)
+    cache_hits: Mapped[int] = mapped_column(Integer, default=0)
+    actual_cost: Mapped[float] = mapped_column(Numeric(14, 8), default=0)
+    baseline_cost: Mapped[float] = mapped_column(Numeric(14, 8), default=0)
+    saved: Mapped[float] = mapped_column(Numeric(14, 8), default=0)
+
+class UsageRollupState(Base):
+    """Per-tenant high-water mark on usage_events.id so rollups run exactly once."""
+    __tablename__ = "usage_rollup_state"
+    tenant_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    last_event_id: Mapped[int] = mapped_column(Integer, default=0)
+
+class AuditLog(Base):
+    """Append-only record of security-relevant actions (key reveals, provider
+    changes, billing events). Written via raw SQL by .audit.record_audit."""
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(255), default="")
+    detail: Mapped[dict] = mapped_column(JSON().with_variant(JSONB, "postgresql"), default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
 def initialize_database() -> None:
     Base.metadata.create_all(bind=engine)
@@ -71,6 +107,24 @@ def initialize_database() -> None:
             conn.execute(text('CREATE INDEX IF NOT EXISTS notifications_tenant_idx ON notifications(tenant_id,id DESC)'))
             conn.execute(text('CREATE INDEX IF NOT EXISTS cache_records_expires_idx ON cache_records (expires_at)'))
             conn.execute(text('CREATE INDEX IF NOT EXISTS usage_events_created_idx ON usage_events (created_at)'))
-            conn.execute(text("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS baseline_provider TEXT"))
-    except Exception:
-        pass  # workspaces table is provisioned by schema.sql in production deployments
+            conn.execute(text('ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS baseline_provider TEXT'))
+            conn.execute(text('''CREATE TABLE IF NOT EXISTS daily_usage_rollups (
+                tenant_id TEXT NOT NULL, day DATE NOT NULL, provider TEXT NOT NULL,
+                requests INTEGER NOT NULL DEFAULT 0, cache_hits INTEGER NOT NULL DEFAULT 0,
+                actual_cost NUMERIC(14,8) NOT NULL DEFAULT 0, baseline_cost NUMERIC(14,8) NOT NULL DEFAULT 0,
+                saved NUMERIC(14,8) NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (tenant_id, day, provider))'''))
+            conn.execute(text('''CREATE TABLE IF NOT EXISTS usage_rollup_state (
+                tenant_id TEXT PRIMARY KEY, last_event_id INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now())'''))
+            conn.execute(text('''CREATE TABLE IF NOT EXISTS audit_log (
+                id BIGSERIAL PRIMARY KEY, tenant_id TEXT, user_id BIGINT,
+                action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '',
+                detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now())'''))
+            conn.execute(text('CREATE INDEX IF NOT EXISTS audit_log_tenant_idx ON audit_log (tenant_id, id DESC)'))
+    except Exception as exc:
+        # workspaces table is provisioned by schema.sql in production deployments;
+        # log instead of silently swallowing real migration failures. The audit
+        # and rollup tables are created by Base.metadata.create_all above.
+        logging.getLogger("promptcache").warning("schema patch skipped: %s", exc)

@@ -1,4 +1,7 @@
-import hashlib, math, re, time
+import hashlib
+import math
+import re
+import time
 from collections import Counter
 
 STOP = {"a","an","and","are","as","at","be","by","for","from","how","i","in","is","it","of","on","or","that","the","this","to","was","what","with"}

@@ -47,7 +47,7 @@ class FastEmbedEmbedding:
         from fastembed import TextEmbedding
         self.model = TextEmbedding(model_name=model)
     def embed(self, text: str) -> list[float]:
-        return list(next(self.model.embed([text])))
+        return [float(value) for value in next(iter(self.model.embed([text])))]
 
 def build_embedding_provider():
     """Select the semantic embedding provider from environment configuration.

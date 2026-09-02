@@ -1,7 +1,7 @@
 """Production auth + baseline-provider tests (SQLite-backed; no live Postgres needed)."""
 import sqlite3
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from types import SimpleNamespace
 
 from sqlalchemy import create_engine, text
@@ -68,7 +68,7 @@ class AuthTests(unittest.TestCase):
     def test_expired_key_rejected(self):
         raw, _ = auth.create_key(self.session, "t_ws2")
         self.session.execute(text("UPDATE api_keys SET expires_at=:e"),
-                             {"e": datetime.now(timezone.utc) - timedelta(days=1)})
+                             {"e": datetime.now(UTC) - timedelta(days=1)})
         self.session.commit()
         self.assertIsNone(auth.authenticate(self.session, raw))
 

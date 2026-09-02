@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from promptcache.production.db import UsageEvent
@@ -12,9 +12,9 @@ class RequestLedgerTests(unittest.TestCase):
         self.session=Session(self.engine)
         for index in range(3):
             self.session.add(UsageEvent(tenant_id='ws_one',provider='mock',cached=index%2==0,
-                actual_cost=.01,baseline_cost=.03,saved=.02,latency_ms=20+index,created_at=datetime.now(timezone.utc)))
+                actual_cost=.01,baseline_cost=.03,saved=.02,latency_ms=20+index,created_at=datetime.now(UTC)))
         self.session.add(UsageEvent(tenant_id='ws_other',provider='mock',cached=False,
-            actual_cost=.01,baseline_cost=.01,saved=0,latency_ms=50,created_at=datetime.now(timezone.utc)))
+            actual_cost=.01,baseline_cost=.01,saved=0,latency_ms=50,created_at=datetime.now(UTC)))
         self.session.commit()
     def tearDown(self):
         self.session.close();self.engine.dispose()

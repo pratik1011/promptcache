@@ -90,6 +90,30 @@ CREATE TABLE cache_records (
   created_at TIMESTAMP,
   expires_at TIMESTAMP
 );
+CREATE TABLE audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT,
+  user_id INTEGER,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '{}',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE daily_usage_rollups (
+  tenant_id TEXT NOT NULL,
+  day DATE NOT NULL,
+  provider TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  cache_hits INTEGER NOT NULL DEFAULT 0,
+  actual_cost NUMERIC NOT NULL DEFAULT 0,
+  baseline_cost NUMERIC NOT NULL DEFAULT 0,
+  saved NUMERIC NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, day, provider)
+);
+CREATE TABLE usage_rollup_state (
+  tenant_id TEXT PRIMARY KEY,
+  last_event_id INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE workspace_providers (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id TEXT NOT NULL,
@@ -198,6 +222,22 @@ class AppHttpTests(unittest.TestCase):
             response = client.post("/v1/chat/completions",
                                    json={"messages": [{"role": "user", "content": "hi"}]})
             self.assertEqual(response.status_code, 401)
+
+    def test_request_id_header_and_audit_trail(self):
+        with self._patched_client() as client:
+            inbound = client.get("/health", headers={"X-Request-ID": "test-req-42"})
+            self.assertEqual(inbound.headers["x-request-id"], "test-req-42")
+            generated = client.get("/health").headers["x-request-id"]
+            self.assertEqual(len(generated), 16)
+
+            signup = client.post("/v1/auth/signup",
+                                 json={"email": "audit@example.com", "password": "long-enough-password"})
+            token = signup.json()["access_token"]
+            ws = client.post("/v1/workspaces", json={"name": "AuditWs"},
+                             headers={"Authorization": f"Bearer {token}"}).json()
+            events = client.get(f"/v1/workspaces/{ws['tenant_id']}/audit",
+                                headers={"Authorization": f"Bearer {token}"}).json()["events"]
+            self.assertTrue(any(event["action"] == "workspace.create" for event in events))
 
 
 if __name__ == "__main__":

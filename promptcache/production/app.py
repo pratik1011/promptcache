@@ -1,5 +1,7 @@
-import logging,jwt,os
-from datetime import datetime, timedelta, timezone
+import logging
+import jwt
+import os
+from datetime import datetime, timedelta, UTC
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,9 +19,11 @@ from .billing import (apply_event, billing_summary, checkout, enforce_request_li
                       enforce_workspace_limit, portal, user_id_from_token, verify_webhook)
 from .provider_connections import PRESETS, delete_connection, list_connections, save_connection, test_values
 from .reliability import enforce_budget, get_policy, update_policy
-from .alerts import get_alert_settings, list_notifications, mark_read, save_alert_settings
 from ..config.settings import load_settings
+from .audit import list_audit, record_audit
+from .observability import RequestIdMiddleware, configure_logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+configure_logging()
 logger=logging.getLogger("promptcache"); settings=load_settings(); limiter=RateLimiter()
 auth_limiter=RateLimiter(limit=int(os.getenv("RATE_LIMIT_AUTH_PER_MINUTE","10")),window_seconds=60,name="auth")
 _INSECURE_DEFAULTS={"", "change-me", "development-only", "unsafe-development-secret", "generate-a-fernet-key", "replace-me", "replace-before-production"}
@@ -47,6 +51,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# X-Request-ID on every response + structured access log (JSON when LOG_FORMAT=json).
+app.add_middleware(RequestIdMiddleware)
 class CompletionRequest(BaseModel):
  messages:list[dict]=Field(min_length=1); provider:str|None=None; temperature:float|None=None; cache:bool=True; cache_namespace:str="default"; stream:bool=False
 @app.on_event("startup")
@@ -84,13 +90,13 @@ def completions(request:CompletionRequest, authorization:str|None=Header(default
    def generate():
     try:
      yield first
-     for chunk in stream: yield chunk
+     yield from stream
     finally:
      session.close()
    return StreamingResponse(generate(),media_type="text/event-stream",headers={"Cache-Control":"no-cache"})
   with SessionLocal() as session: result=production_complete(request.model_dump(),t,settings,session)
   result["promptcache"]["tenant"]=t; return result
- except RateLimitExceeded: raise HTTPException(429,"Rate limit exceeded")
+ except RateLimitExceeded: raise HTTPException(429,"Rate limit exceeded") from None
  except HTTPException: raise
  except Exception as exc:
   logger.exception("completion_failed tenant=%s",t); raise HTTPException(502,f"Provider gateway error: {exc}") from exc
@@ -117,6 +123,8 @@ def create_tenant_key(request: CreateKeyRequest, authorization: str | None = Hea
     require_admin(authorization)
     with SessionLocal() as session:
         raw, expires_at = create_key(session, request.tenant_id)
+        record_audit(session, "api_key.create", tenant_id=request.tenant_id,
+                     detail={"expires_at": expires_at.isoformat()})
     return {"tenant_id": request.tenant_id, "api_key": raw, "expires_at": expires_at.isoformat(), "warning": "Store this key securely."}
 
 @app.delete("/v1/admin/keys/{key_id}")
@@ -124,6 +132,7 @@ def revoke_tenant_key(key_id: int, authorization: str | None = Header(default=No
     require_admin(authorization)
     with SessionLocal() as session:
         if not revoke_key(session, key_id): raise HTTPException(404, "API key not found")
+        record_audit(session, "api_key.revoke", target=f"key:{key_id}")
     return {"revoked": True, "key_id": key_id}
 
 class SignupRequest(BaseModel):
@@ -135,11 +144,12 @@ def register(request: SignupRequest, http_request: Request):
     try:
         auth_limiter.check(http_request.client.host if http_request.client else "unknown")
     except RateLimitExceeded:
-        raise HTTPException(429, "Too many signup attempts; try again later")
+        raise HTTPException(429, "Too many signup attempts; try again later") from None
     try:
         with SessionLocal() as session:
             user_id = signup(session, request.email, request.password)
-            token = jwt.encode({"sub":str(user_id),"exp":datetime.now(timezone.utc)+timedelta(hours=8)},jwt_secret(),algorithm="HS256")
+            token = jwt.encode({"sub":str(user_id),"exp":datetime.now(UTC)+timedelta(hours=8)},jwt_secret(),algorithm="HS256")
+            record_audit(session, "auth.signup", user_id=user_id, target=request.email)
         return {"access_token": token, "token_type": "bearer", "expires_in": 28800, "message": "Account created. You are now logged in."}
     except Exception as exc:
         raise HTTPException(400, "Unable to create account") from exc
@@ -156,6 +166,7 @@ def create_ws(request: CreateWorkspaceRequest, authorization: str | None = Heade
         with SessionLocal() as session:
             enforce_workspace_limit(session, user_id)
             tenant_id, api_key, expires_at = create_workspace(session, user_id, request.name)
+            record_audit(session, "workspace.create", tenant_id=tenant_id, user_id=user_id, target=request.name)
         return {"tenant_id": tenant_id, "name": request.name, "api_key": api_key, "expires_at": expires_at, "message": "Workspace created. Your API key is saved in your dashboard and can be re-revealed anytime."}
     except HTTPException: raise
     except Exception as exc: raise HTTPException(400, "Unable to create workspace") from exc
@@ -172,6 +183,7 @@ def regenerate_ws_key(tenant_id: str, authorization: str | None = Header(default
             if not ws: raise HTTPException(404, "Workspace not found")
             revoke_all_keys(session, tenant_id)
             new_key, expires_at = create_key(session, tenant_id)
+            record_audit(session, "api_key.regenerate", tenant_id=tenant_id, user_id=user_id)
         return {"tenant_id": tenant_id, "api_key": new_key, "expires_at": expires_at.isoformat(), "message": "New API key generated. Previous key(s) revoked."}
     except HTTPException: raise
     except Exception as exc: raise HTTPException(400, "Unable to regenerate key") from exc
@@ -201,6 +213,8 @@ def reveal_ws_keys(tenant_id: str, authorization: str | None = Header(default=No
             ws = session.execute(text("SELECT id FROM workspaces WHERE tenant_id=:t AND owner_id=:u"), {"t": tenant_id, "u": user_id}).first()
             if not ws: raise HTTPException(404, "Workspace not found")
             keys = reveal_keys(session, tenant_id)
+            record_audit(session, "api_key.reveal", tenant_id=tenant_id, user_id=user_id,
+                         detail={"count": len(keys)})
         return {"tenant_id": tenant_id, "keys": keys}
     except HTTPException: raise
     except Exception as exc: raise HTTPException(400, "Unable to reveal keys") from exc
@@ -214,9 +228,11 @@ def sign_in(request: LoginRequest, http_request: Request):
     try:
         auth_limiter.check(http_request.client.host if http_request.client else "unknown")
     except RateLimitExceeded:
-        raise HTTPException(429, "Too many login attempts; try again later")
+        raise HTTPException(429, "Too many login attempts; try again later") from None
     try:
-        with SessionLocal() as session: token = login(session, request.email, request.password)
+        with SessionLocal() as session:
+            token = login(session, request.email, request.password)
+            record_audit(session, "auth.login", target=request.email)
         return {"access_token": token, "token_type": "bearer", "expires_in": 28800}
     except Exception as exc:
         raise HTTPException(401, "Invalid email or password") from exc
@@ -310,7 +326,10 @@ def connect_workspace_provider(tenant_id: str, request: ProviderConnectionReques
     if request.provider_type not in PRESETS: raise HTTPException(400,'Unsupported provider type')
     with SessionLocal() as session:
         require_workspace(session,tenant_id,user_id)
-        return save_connection(session,tenant_id,request.model_dump())
+        connection = save_connection(session,tenant_id,request.model_dump())
+        record_audit(session, "provider.connect", tenant_id=tenant_id, user_id=user_id,
+                     target=str(connection.get("id")), detail={"provider_type": request.provider_type})
+        return connection
 
 @app.post('/v1/workspaces/{tenant_id}/providers/test')
 def test_workspace_provider(tenant_id: str, request: ProviderConnectionRequest, authorization: str | None = Header(default=None)):
@@ -325,13 +344,25 @@ def disconnect_workspace_provider(tenant_id: str, connection_id: int, authorizat
     with SessionLocal() as session:
         require_workspace(session,tenant_id,user_id)
         if not delete_connection(session,tenant_id,connection_id): raise HTTPException(404,'Provider connection not found')
+        record_audit(session, "provider.disconnect", tenant_id=tenant_id, user_id=user_id, target=str(connection_id))
     return {'deleted':True}
+
+@app.get('/v1/workspaces/{tenant_id}/audit')
+def workspace_audit(tenant_id: str, authorization: str | None = Header(default=None),
+                    limit: int = Query(default=100, ge=1, le=500)):
+    """Newest-first audit trail for the workspace (key, provider, and billing actions)."""
+    user_id = user_id_from_token(authorization)
+    with SessionLocal() as session:
+        require_workspace(session, tenant_id, user_id)
+        return {"tenant_id": tenant_id, "events": list_audit(session, tenant_id, limit=limit)}
 
 @app.post('/v1/billing/checkout')
 def create_checkout(request: CheckoutRequest, authorization: str | None = Header(default=None)):
     user_id = user_id_from_token(authorization)
     with SessionLocal() as session:
-        return {'url': checkout(session, user_id, request.plan)}
+        url = checkout(session, user_id, request.plan)
+        record_audit(session, "billing.checkout", user_id=user_id, detail={"plan": request.plan})
+        return {'url': url}
 
 @app.post('/v1/billing/portal')
 def create_portal(authorization: str | None = Header(default=None)):

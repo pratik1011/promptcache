@@ -1,5 +1,7 @@
-import hashlib, hmac, os, secrets
-from datetime import datetime, timedelta, timezone
+import hashlib
+import os
+import secrets
+from datetime import datetime, timedelta, UTC
 from sqlalchemy import text
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -34,7 +36,7 @@ KEY_TTL_DAYS = int(os.getenv("API_KEY_TTL_DAYS", "90"))
 
 def create_key(session, tenant_id: str, ttl_days: int | None = None) -> tuple[str, datetime]:
     raw = "pc_" + secrets.token_urlsafe(32)
-    expires = datetime.now(timezone.utc) + timedelta(days=ttl_days or KEY_TTL_DAYS)
+    expires = datetime.now(UTC) + timedelta(days=ttl_days or KEY_TTL_DAYS)
     session.execute(text("INSERT INTO api_keys (tenant_id, key_hash, key_encrypted, expires_at) VALUES (:tenant, :hash, :enc, :exp)"),
                     {"tenant": tenant_id, "hash": key_hash(raw), "enc": encrypt_key(raw), "exp": expires})
     session.commit()
@@ -51,7 +53,7 @@ def _lookup(session, now: datetime, hash_value: str) -> str | None:
             try: exp = datetime.fromisoformat(exp)
             except ValueError: exp = None
         if exp is not None and exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+            exp = exp.replace(tzinfo=UTC)
         if exp is not None and exp < now:
             return None
         return item["tenant_id"]
@@ -59,7 +61,7 @@ def _lookup(session, now: datetime, hash_value: str) -> str | None:
 
 def authenticate(session, raw: str) -> str | None:
     """Resolve an API key to its tenant via an indexed exact-hash lookup."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tenant = _lookup(session, now, key_hash(raw))
     if tenant is not None:
         return tenant
@@ -72,18 +74,18 @@ def revoke_key(session, key_id: int) -> bool:
 
 def revoke_all_keys(session, tenant_id: str) -> None:
     session.execute(text("UPDATE api_keys SET active=false, last_rotated_at=:now WHERE tenant_id=:tenant AND active=true"),
-                    {"tenant": tenant_id, "now": datetime.now(timezone.utc)})
+                    {"tenant": tenant_id, "now": datetime.now(UTC)})
     session.commit()
 
 def list_keys(session, tenant_id: str) -> list[dict]:
     rows = session.execute(text("SELECT id, tenant_id, active, created_at, expires_at, last_rotated_at FROM api_keys WHERE tenant_id=:tenant ORDER BY created_at DESC"),
                           {"tenant": tenant_id}).mappings().all()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     result = []
     for r in rows:
         exp = r["expires_at"]
         if exp is not None and exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+            exp = exp.replace(tzinfo=UTC)
         days_left = (exp - now).days if exp else None
         result.append({
             "id": r["id"],
@@ -106,7 +108,7 @@ def reveal_keys(session, tenant_id: str) -> list[dict]:
         "SELECT id, key_encrypted, created_at, expires_at FROM api_keys "
         "WHERE tenant_id=:tenant AND active=true AND (expires_at IS NULL OR expires_at > now()) "
         "ORDER BY created_at DESC"), {"tenant": tenant_id}).mappings().all()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     revealed = []
     for r in rows:
         raw = decrypt_key(r["key_encrypted"])
@@ -115,7 +117,7 @@ def reveal_keys(session, tenant_id: str) -> list[dict]:
         session.execute(text("UPDATE api_keys SET last_revealed_at=:now WHERE id=:id"), {"now": now, "id": r["id"]})
         exp = r["expires_at"]
         if exp is not None and exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+            exp = exp.replace(tzinfo=UTC)
         revealed.append({
             "id": r["id"],
             "key": raw,
@@ -129,7 +131,7 @@ def bootstrap(session):
     raw = os.getenv("BOOTSTRAP_API_KEY")
     tenant = os.getenv("BOOTSTRAP_TENANT_ID", "local-dev")
     if raw:
-        expires = datetime.now(timezone.utc) + timedelta(days=KEY_TTL_DAYS)
+        expires = datetime.now(UTC) + timedelta(days=KEY_TTL_DAYS)
         session.execute(text("INSERT INTO api_keys (tenant_id, key_hash, key_encrypted, expires_at) VALUES (:tenant, :hash, :enc, :exp) ON CONFLICT (key_hash) DO UPDATE SET key_encrypted=EXCLUDED.key_encrypted"),
                         {"tenant": tenant, "hash": key_hash(raw), "enc": encrypt_key(raw), "exp": expires})
         session.commit()

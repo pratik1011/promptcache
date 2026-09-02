@@ -3,10 +3,10 @@ import json
 import time
 from time import sleep
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from sqlalchemy import text
 from ..cache.semantic import key, normalize_prompt
-from ..core.safety import contains_secret
+from ..core.safety import contains_secret, pii_redaction_enabled, redact_pii
 from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
 from ..providers.embeddings import build_embedding_provider
 from ..routing.router import select_provider
@@ -62,11 +62,12 @@ def complete(request, tenant, settings, session):
             logger.warning("semantic matching failed tenant=%s; falling back to exact cache", tenant)
             vector = None
     actual = 0.0
+    response: dict | None
     if hit:
         response = copy.deepcopy(hit.response); baseline = float(hit.cost)
         response["promptcache"] = {"cached": True, "match": "semantic" if semantic_score is not None else "exact", "similarity": float(semantic_score) if semantic_score is not None else 1.0, "provider": hit.provider, "complexity": complexity}
     else:
-        response = None; last_error = None
+        response = None; last_error: Exception | None = None
         candidates = [provider] + [p for p in settings.providers if p['id'] != provider['id']]
         attempts = int(settings.max_retries) + 1
         generation = 0
@@ -93,7 +94,7 @@ def complete(request, tenant, settings, session):
         actual = (p*provider.get("inputCostPerMillion",0)+o*provider.get("outputCostPerMillion",0))/1e6
         premium=_baseline_provider(settings, session, tenant); baseline=(p*premium.get("inputCostPerMillion",0)+o*premium.get("outputCostPerMillion",0))/1e6
         response["promptcache"]={"cached":False,"provider":provider["id"],"complexity":complexity,"baselineProvider":premium["id"]}
-        if caching: cache.save(tenant_id=tenant, cache_key=cache_key, prompt=prompt, response=response, embedding=vector, provider=provider["id"], cost=actual, expires_at=datetime.now(timezone.utc)+timedelta(seconds=settings.cache_ttl_seconds))
+        if caching: cache.save(tenant_id=tenant, cache_key=cache_key, prompt=redact_pii(prompt) if pii_redaction_enabled() else prompt, response=response, embedding=vector, provider=provider["id"], cost=actual, expires_at=datetime.now(UTC)+timedelta(seconds=settings.cache_ttl_seconds))
     event={"tenant_id":tenant,"provider":response["promptcache"]["provider"],"cached":bool(hit),"actual_cost":actual,"baseline_cost":baseline,"saved":max(0,baseline-actual),"latency_ms":round((time.monotonic()-start)*1000)}; usage.record(**event); response["promptcache"]["cost"]=event; return response
 
 
@@ -124,7 +125,7 @@ def stream_complete(request, tenant, settings, session):
                  "latency_ms": round((time.monotonic() - start) * 1000)}
         usage.record(**event)
         return
-    stream = None; last_error = None
+    stream = None; last_error: Exception | None = None
     candidates = [provider] + [p for p in settings.providers if p['id'] != provider['id']]
     attempts = int(settings.max_retries) + 1
     generation = 0
@@ -173,8 +174,9 @@ def stream_complete(request, tenant, settings, session):
             "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": p, "completion_tokens": o, "total_tokens": p + o},
         }
-        cache.save(tenant_id=tenant, cache_key=cache_key, prompt=prompt,
+        cache.save(tenant_id=tenant, cache_key=cache_key,
+                   prompt=redact_pii(prompt) if pii_redaction_enabled() else prompt,
                    response=cached_response, embedding=None, provider=provider["id"], cost=actual,
-                   expires_at=datetime.now(timezone.utc)+timedelta(seconds=settings.cache_ttl_seconds))
+                   expires_at=datetime.now(UTC)+timedelta(seconds=settings.cache_ttl_seconds))
     event={"tenant_id":tenant,"provider":provider["id"],"cached":False,"actual_cost":actual,"baseline_cost":baseline,"saved":max(0,baseline-actual),"latency_ms":round((time.monotonic()-start)*1000)}
     usage.record(**event)

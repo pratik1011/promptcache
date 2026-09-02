@@ -1,0 +1,22 @@
+[project]
+name = "promptcache"
+version = "0.1.0"
+description = "Provider-neutral AI gateway with exact + semantic prompt caching"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+# The gateway codebase intentionally uses compact statements; keep the lint
+# gate focused on real defects (unused names, imports, bugs, upgrades).
+select = ["E", "F", "W", "B", "UP"]
+ignore = ["E501", "E701", "E702", "E741", "B008"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+exclude = ["migrations", "tests"]

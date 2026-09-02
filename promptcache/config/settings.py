@@ -1,11 +1,14 @@
+import json
+import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Load a local .env without requiring a framework.
 def _load_dotenv() -> None:
     path = Path(".env")
     if not path.exists():
         return
-    import os
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -14,9 +17,6 @@ def _load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("\\\""))
 
 _load_dotenv()
-import json, os
-from dataclasses import dataclass
-from typing import Any
 
 def _json(name: str, default: list[dict[str, Any]]) -> list[dict[str, Any]]:
     raw = os.getenv(name)
