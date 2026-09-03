@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import jwt
 import os
 from datetime import datetime, timedelta, UTC
@@ -15,7 +15,7 @@ from .accounts import signup, login, current_user, create_workspace
 from .config import jwt_secret
 import hmac
 from .repositories import UsageRepository, prune_expired, purge_cache
-from .billing import (apply_event, billing_summary, checkout, enforce_request_limit,
+from .billing import (accrue_all_fees, accrue_savings_fee, apply_event, billing_summary, checkout, enforce_request_limit,
                       enforce_workspace_limit, portal, user_id_from_token, verify_webhook)
 from .provider_connections import (PRESETS, delete_connection, list_connections,
                                    save_connection, test_values)
@@ -176,6 +176,27 @@ def revoke_tenant_key(key_id: int, authorization: str | None = Header(default=No
         if not revoke_key(session, key_id): raise HTTPException(404, "API key not found")
         record_audit(session, "api_key.revoke", target=f"key:{key_id}")
     return {"revoked": True, "key_id": key_id}
+
+@app.post("/v1/admin/accrue-fees")
+def admin_accrue_fees(authorization: str | None = Header(default=None)):
+    """Operator/cron endpoint: accrue savings fees for all workspaces."""
+    require_admin(authorization)
+    with SessionLocal() as session:
+        results = accrue_all_fees(session)
+        record_audit(session, "billing.accrue_all_fees", detail={"workspaces": len(results)})
+        return {"accrued": results}
+
+
+@app.post("/v1/billing/savings-fee/accrue")
+def user_accrue_savings_fee(authorization: str | None = Header(default=None)):
+    """User-facing endpoint: accrue (bill) this user's share of monthly savings."""
+    user_id = user_id_from_token(authorization)
+    with SessionLocal() as session:
+        result = accrue_savings_fee(session, user_id)
+        record_audit(session, "billing.accrue_savings_fee", user_id=user_id, detail={
+            "billed_now": result.get("billed_now"), "invoice_item_id": result.get("invoice_item_id")})
+        return result
+
 
 class SignupRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
@@ -453,3 +474,5 @@ def get_baseline(tenant_id: str, authorization: str | None = Header(default=None
             return {"tenant_id": tenant_id, "baseline_provider": ws[0]}
     except HTTPException: raise
     except Exception as exc: raise HTTPException(400, "Unable to read baseline") from exc
+
+

@@ -1,7 +1,8 @@
-'''Stripe billing and plan enforcement for PromptCache.'''
+﻿'''Stripe billing and plan enforcement for PromptCache.'''
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import datetime, UTC
@@ -12,6 +13,8 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 from .config import jwt_secret
+
+logger = logging.getLogger("promptcache")
 
 PLANS = {
     'developer': {'name': 'Developer', 'price': 0, 'requests': 10_000, 'workspaces': 1},
@@ -51,8 +54,79 @@ def savings_fee_summary(session, user_id: int) -> dict:
     fee = float(saved) * share / 100.0
     if cap > 0:
         fee = min(fee, cap)
+    now_dt = now
+    month = now_dt.strftime('%Y-%m')
+    accrued = _accrued_total(session, user_id, month)
     return {'savings_this_month': float(saved), 'savings_share_percent': share,
-            'platform_fee': round(fee, 2), 'platform_fee_cap': cap or None}
+            'platform_fee': round(fee, 2), 'platform_fee_cap': cap or None,
+            'month': month, 'accrued_this_month': accrued,
+            'unbilled_fee': round(max(0.0, fee - accrued), 2)}
+
+def _accrued_total(session, user_id: int, month: str) -> float:
+    """Accrued-so-far total from the fee ledger; 0.0 when the table is absent
+    (pre-migration databases) so the billing read path can never 500."""
+    try:
+        row = session.execute(text('SELECT accrued FROM fee_accruals WHERE user_id=:u AND month=:m'),
+                              {'u': user_id, 'm': month}).first()
+        return float(row[0]) if row else 0.0
+    except Exception:
+        session.rollback()
+        return 0.0
+
+def accrue_savings_fee(session, user_id: int) -> dict:
+    """Bill the unbilled share of this month's savings fee via a Stripe invoice item.
+
+    Stripe adds the item to the customer's next subscription invoice. The
+    fee_accruals ledger makes accrual idempotent: only the unbilled delta
+    (fee minus already-accrued) is invoiced, and deltas below one cent are
+    skipped because Stripe rejects sub-cent invoice items. Without Stripe
+    configured, or without a Stripe customer, nothing is billed or recorded â€”
+    so dev environments stay no-op and the first real accrual bills in full.
+    A shrinking fee (credit scenario) is ignored rather than netted.
+    """
+    summary = savings_fee_summary(session, user_id)
+    unbilled = round(summary['platform_fee'] - summary['accrued_this_month'], 2)
+    result = {**summary, 'billed_now': 0.0, 'invoice_item_id': None, 'accrued': False}
+    if unbilled < 0.01:
+        return result
+    if not stripe_enabled():
+        return {**result, 'reason': 'stripe_not_configured'}
+    customer = session.execute(text('SELECT stripe_customer_id FROM users WHERE id=:id'), {'id': user_id}).scalar()
+    if not customer:
+        return {**result, 'reason': 'no_billing_account'}
+    item = _stripe_post('invoiceitems', {
+        'customer': customer, 'amount': int(round(unbilled * 100)), 'currency': 'usd',
+        'description': f"PromptCache platform fee ({summary['savings_share_percent']:g}% of ${summary['savings_this_month']:.2f} saved)"})
+    now = datetime.now(UTC)
+    # ON CONFLICT works on both Postgres and SQLite (3.24+); a ledger write
+    # failure raises, which prevents billing without recording the accrual.
+    session.execute(text('''INSERT INTO fee_accruals (user_id, month, accrued, currency, last_accrued_at)
+        VALUES (:u, :m, :a, 'usd', :at)
+        ON CONFLICT (user_id, month) DO UPDATE SET accrued=:a, last_accrued_at=:at'''),
+        {'u': user_id, 'm': summary['month'], 'a': summary['platform_fee'], 'at': now})
+    session.commit()
+    return {**result, 'billed_now': unbilled, 'invoice_item_id': item.get('id'), 'accrued': True}
+
+def accrue_all_fees(session) -> dict:
+    """Accrue the savings fee for every user with a Stripe billing account.
+
+    Entry point for the daily fee cron (POST /v1/admin/accrue-fees); one
+    failing user is logged and skipped instead of blocking the rest.
+    """
+    if not stripe_enabled():
+        return {'scanned': 0, 'billed_users': 0, 'billed_total': 0.0, 'skipped': 'stripe_not_configured'}
+    ids = [int(row[0]) for row in session.execute(
+        text('SELECT id FROM users WHERE stripe_customer_id IS NOT NULL')).all()]
+    results = []
+    for user_id in ids:
+        try:
+            results.append(accrue_savings_fee(session, user_id))
+        except Exception as exc:
+            session.rollback()
+            logger.warning('savings-fee accrual failed for user %s: %s', user_id, exc)
+    return {'scanned': len(ids),
+            'billed_users': sum(1 for r in results if r.get('accrued')),
+            'billed_total': round(sum(float(r.get('billed_now') or 0) for r in results), 2)}
 
 def billing_summary(session, user_id: int) -> dict:
     user = session.execute(text('''SELECT email, plan, subscription_status,
