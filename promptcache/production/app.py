@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import jwt
 import os
 from datetime import datetime, timedelta, UTC
@@ -11,7 +11,7 @@ from .db import SessionLocal, initialize_database
 from .gateway import complete as production_complete, stream_complete as production_stream_complete
 from .rate_limit import RateLimiter, RateLimitExceeded
 from .auth import authenticate, bootstrap, create_key, revoke_key, revoke_all_keys, list_keys, reveal_keys
-from .accounts import signup, login, current_user, create_workspace
+from .accounts import signup, login, current_user, create_workspace, password_hash, verify_password
 from .config import jwt_secret
 import hmac
 from .repositories import UsageRepository, prune_expired, purge_cache
@@ -21,6 +21,7 @@ from .provider_connections import (PRESETS, delete_connection, list_connections,
                                    save_connection, test_values)
 from ..providers.adapters import embed_provider
 from .reliability import enforce_budget, get_policy, update_policy
+from .alerts import get_alert_settings, list_notifications, mark_read, save_alert_settings
 from ..config.settings import load_settings
 from .audit import list_audit, record_audit
 from .observability import RequestIdMiddleware, configure_logging
@@ -286,6 +287,10 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
 @app.post("/v1/auth/login")
 def sign_in(request: LoginRequest, http_request: Request):
     try:
@@ -309,6 +314,33 @@ def me(authorization: str | None = Header(default=None)):
         return {"email": rows[0]["email"], "workspaces": [{"name":r["name"],"tenant_id":r["tenant_id"]} for r in rows if r["tenant_id"]]}
     except HTTPException: raise
     except Exception as exc: raise HTTPException(401,"Invalid or expired token") from exc
+
+@app.post('/v1/auth/change-password')
+def change_password(request: ChangePasswordRequest, authorization: str | None = Header(default=None)):
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        row=session.execute(text('SELECT password_hash FROM users WHERE id=:user'),{'user':user_id}).mappings().first()
+        if not row or not verify_password(request.current_password,row['password_hash']):
+            raise HTTPException(400,'Current password is incorrect')
+        session.execute(text('UPDATE users SET password_hash=:password WHERE id=:user'),{'password':password_hash(request.new_password),'user':user_id})
+        session.commit()
+        record_audit(session,'account.password_change',user_id=user_id)
+    return {'changed':True}
+
+@app.get('/v1/account/export')
+def export_account(authorization: str | None = Header(default=None)):
+    '''Account data export that never includes encrypted provider credentials.'''
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        user=session.execute(text('SELECT email,created_at,plan,subscription_status FROM users WHERE id=:user'),{'user':user_id}).mappings().first()
+        workspaces=session.execute(text('SELECT name,tenant_id,baseline_provider,created_at FROM workspaces WHERE owner_id=:user ORDER BY id'),{'user':user_id}).mappings().all()
+        providers=session.execute(text('SELECT p.tenant_id,p.provider_type,p.name,p.base_url,p.model,p.active,p.created_at FROM workspace_providers p JOIN workspaces w ON w.tenant_id=p.tenant_id WHERE w.owner_id=:user ORDER BY p.id'),{'user':user_id}).mappings().all()
+        events=session.execute(text('SELECT e.tenant_id,e.provider,e.cached,e.actual_cost,e.baseline_cost,e.saved,e.latency_ms,e.created_at FROM usage_events e JOIN workspaces w ON w.tenant_id=e.tenant_id WHERE w.owner_id=:user ORDER BY e.id DESC LIMIT 10000'),{'user':user_id}).mappings().all()
+        audit=session.execute(text('SELECT tenant_id,action,target,detail,created_at FROM audit_log WHERE user_id=:user OR tenant_id IN (SELECT tenant_id FROM workspaces WHERE owner_id=:user) ORDER BY id DESC LIMIT 10000'),{'user':user_id}).mappings().all()
+        record_audit(session,'account.export',user_id=user_id)
+        def serial(row):
+            return {key:(value.isoformat() if hasattr(value,'isoformat') else value) for key,value in dict(row).items()}
+        return {'exported_at':datetime.now(UTC).isoformat(),'account':serial(user),'workspaces':[serial(row) for row in workspaces],'providers':[serial(row) for row in providers],'usage_events':[serial(row) for row in events],'audit_events':[serial(row) for row in audit]}
 
 class CheckoutRequest(BaseModel):
     plan: str = Field(min_length=1, max_length=32)
@@ -357,6 +389,52 @@ def request_ledger(tenant_id: str, authorization: str | None = Header(default=No
 def require_workspace(session, tenant_id: str, user_id: int) -> None:
     owned=session.execute(text('SELECT 1 FROM workspaces WHERE tenant_id=:tenant AND owner_id=:owner'),{'tenant':tenant_id,'owner':user_id}).first()
     if not owned: raise HTTPException(404,'Workspace not found')
+
+@app.get('/v1/workspaces/{tenant_id}/activation')
+def workspace_activation(tenant_id: str, authorization: str | None = Header(default=None)):
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        require_workspace(session,tenant_id,user_id)
+        provider=bool(session.execute(text('SELECT 1 FROM workspace_providers WHERE tenant_id=:tenant AND active=true LIMIT 1'),{'tenant':tenant_id}).first())
+        requests,cached=session.execute(text('SELECT count(*),count(*) FILTER (WHERE cached=true) FROM usage_events WHERE tenant_id=:tenant'),{'tenant':tenant_id}).one()
+        steps=[
+            {'id':'provider','label':'Connect a provider','detail':'Add an encrypted provider credential in Settings.','complete':provider},
+            {'id':'request','label':'Send your first gateway request','detail':'Use your workspace API key with the OpenAI-compatible endpoint.','complete':requests>0},
+            {'id':'cache','label':'See your first cache hit','detail':'Repeat a request to verify the savings loop.','complete':cached>0},
+        ]
+        return {'tenant_id':tenant_id,'steps':steps,'completed':sum(step['complete'] for step in steps),'total':len(steps),'requests':requests,'cache_hits':cached}
+
+@app.get('/v1/workspaces/{tenant_id}/alerts')
+def get_workspace_alerts(tenant_id: str, authorization: str | None = Header(default=None)):
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        require_workspace(session,tenant_id,user_id)
+        return get_alert_settings(session,tenant_id)
+
+@app.put('/v1/workspaces/{tenant_id}/alerts')
+def set_workspace_alerts(tenant_id: str, request: AlertSettingsRequest, authorization: str | None = Header(default=None)):
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        require_workspace(session,tenant_id,user_id)
+        try: result=save_alert_settings(session,tenant_id,request.model_dump())
+        except ValueError as exc: raise HTTPException(400,str(exc)) from exc
+        record_audit(session,'alerts.update',tenant_id=tenant_id,user_id=user_id,detail={'enabled':request.enabled})
+        return result
+
+@app.get('/v1/workspaces/{tenant_id}/notifications')
+def get_workspace_notifications(tenant_id: str, authorization: str | None = Header(default=None), limit: int = Query(default=50,ge=1,le=100)):
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        require_workspace(session,tenant_id,user_id)
+        return {'notifications':list_notifications(session,tenant_id,limit)}
+
+@app.post('/v1/workspaces/{tenant_id}/notifications/{notification_id}/read')
+def read_workspace_notification(tenant_id: str, notification_id: int, authorization: str | None = Header(default=None)):
+    user_id=user_id_from_token(authorization)
+    with SessionLocal() as session:
+        require_workspace(session,tenant_id,user_id)
+        if not mark_read(session,tenant_id,notification_id): raise HTTPException(404,'Notification not found')
+        return {'read':True}
 
 @app.get('/v1/provider-presets')
 def provider_presets():

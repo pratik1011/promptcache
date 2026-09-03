@@ -7,6 +7,9 @@ import AuthSection from './components/AuthSection'
 import Dashboard from './components/Dashboard'
 import Footer from './components/Footer'
 import Notice from './components/ui/Notice'
+import PricingSection from './components/PricingSection'
+import TrustSection from './components/TrustSection'
+import DocsSection from './components/DocsSection'
 
 export default function App() {
   const { token, user, loading, notice, signup, login, logout, restoreSession, restored, createWorkspace, getWorkspaceKey, regenerateWorkspaceKey, loadWorkspaceKey } = useAuth()
@@ -68,6 +71,9 @@ export default function App() {
             </div>
           </section>
 
+          <PricingSection />
+          <TrustSection />
+          <DocsSection />
           <AuthSection
             onSignup={signup}
             onLogin={login}

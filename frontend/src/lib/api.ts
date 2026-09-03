@@ -1,4 +1,4 @@
-import type { BillingSummary, Metrics, ProviderConnection, ProviderPreset, ReliabilityPolicy, RequestLedger, UserInfo, RevealedKey } from '../types'
+import type { ActivationStatus, AlertSettings, AuditEvent, BillingSummary, Metrics, Notification, ProviderConnection, ProviderPreset, ReliabilityPolicy, RequestLedger, UserInfo, RevealedKey } from '../types'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8787'
 
@@ -120,6 +120,9 @@ export type KeyInfo = {
   expired: boolean
 }
 
+export async function changePassword(token:string,currentPassword:string,newPassword:string):Promise<void>{const r=await fetch(`${API_URL}/v1/auth/change-password`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({current_password:currentPassword,new_password:newPassword})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to change password')}
+export async function exportAccount(token:string):Promise<unknown>{const r=await fetch(`${API_URL}/v1/account/export`,{headers:{Authorization:`Bearer ${token}`}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to export account');return d}
+
 export async function fetchBilling(token: string): Promise<BillingSummary> {
   const r = await fetch(`${API_URL}/v1/billing`, { headers: { Authorization: `Bearer ${token}` } })
   if (!r.ok) throw new Error('Unable to load billing')
@@ -156,3 +159,9 @@ export async function disconnectProvider(token:string,tenantId:string,id:number)
 export async function sendTestRequest(apiKey:string):Promise<{cached:boolean;provider:string}>{const r=await fetch(`${API_URL}/v1/chat/completions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${apiKey}`},body:JSON.stringify({messages:[{role:'user',content:'Reply with: PromptCache is connected.'}]})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Test request failed');return d.promptcache}
 export async function fetchReliability(token:string,tenantId:string):Promise<ReliabilityPolicy>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/reliability`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load reliability policy');return r.json()}
 export async function saveReliability(token:string,tenantId:string,policy:Omit<ReliabilityPolicy,'spent_this_month'|'remaining_budget'>):Promise<ReliabilityPolicy>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/reliability`,{method:'PUT',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(policy)});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to save reliability policy');return d}
+export async function fetchAlertSettings(token:string,tenantId:string):Promise<AlertSettings>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/alerts`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load alert settings');return r.json()}
+export async function saveAlertSettings(token:string,tenantId:string,settings:AlertSettings&{webhook_url?:string}):Promise<AlertSettings>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/alerts`,{method:'PUT',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(settings)});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to save alerts');return d}
+export async function fetchNotifications(token:string,tenantId:string):Promise<Notification[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/notifications`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load notifications');return (await r.json()).notifications}
+export async function markNotificationRead(token:string,tenantId:string,id:number):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/notifications/${id}/read`,{method:'POST',headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to update notification')}
+export async function fetchActivation(token:string,tenantId:string):Promise<ActivationStatus>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/activation`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load activation status');return r.json()}
+export async function fetchAuditEvents(token:string,tenantId:string):Promise<AuditEvent[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/audit?limit=100`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load audit history');return (await r.json()).events}

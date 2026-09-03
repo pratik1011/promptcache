@@ -23,6 +23,7 @@ def _safe_webhook(url:str)->bool:
 
 def get_alert_settings(session,tenant_id:str)->dict:
  row=session.execute(text('SELECT alerts_enabled,budget_alert_percent,latency_alert_ms,cache_hit_alert_percent,webhook_url_encrypted FROM workspaces WHERE tenant_id=:tenant'),{'tenant':tenant_id}).mappings().first()
+ if not row: raise ValueError('Workspace not found')
  return {'enabled':bool(row['alerts_enabled']),'budget_percent':int(row['budget_alert_percent']),'latency_ms':int(row['latency_alert_ms']),'cache_hit_percent':int(row['cache_hit_alert_percent']),'webhook_configured':bool(row['webhook_url_encrypted'])}
 
 def save_alert_settings(session,tenant_id:str,values:dict)->dict:
@@ -30,6 +31,7 @@ def save_alert_settings(session,tenant_id:str,values:dict)->dict:
  if webhook:
   if not _safe_webhook(webhook):raise ValueError('Webhook must be a public HTTPS URL')
   encrypted=encrypt_key(webhook)
+  if not encrypted: raise ValueError('Webhook encryption is not configured')
  session.execute(text('''UPDATE workspaces SET alerts_enabled=:enabled,budget_alert_percent=:budget,
   latency_alert_ms=:latency,cache_hit_alert_percent=:cache,
   webhook_url_encrypted=coalesce(:webhook,webhook_url_encrypted) WHERE tenant_id=:tenant'''),
@@ -40,7 +42,7 @@ def list_notifications(session,tenant_id:str,limit:int=50)->list[dict]:
  return [{**dict(r),'read':bool(r['read_at']),'read_at':r['read_at'].isoformat() if hasattr(r['read_at'],'isoformat') else r['read_at'],'created_at':r['created_at'].isoformat() if hasattr(r['created_at'],'isoformat') else str(r['created_at'])} for r in rows]
 
 def mark_read(session,tenant_id:str,notification_id:int)->bool:
- result=session.execute(text('UPDATE notifications SET read_at=now() WHERE id=:id AND tenant_id=:tenant'),{'id':notification_id,'tenant':tenant_id});session.commit();return result.rowcount==1
+ result=session.execute(text('UPDATE notifications SET read_at=:read_at WHERE id=:id AND tenant_id=:tenant'),{'id':notification_id,'tenant':tenant_id,'read_at':datetime.now(UTC)});session.commit();return result.rowcount==1
 
 def _post_webhook(webhook:str,title:str,message:str)->None:
  try:httpx.post(webhook,json={'text':f'PromptCache — {title}\n{message}'},timeout=3)
@@ -59,7 +61,7 @@ def evaluate_alerts(session,tenant_id:str,latency_ms:int)->None:
  try:
   settings=get_alert_settings(session,tenant_id)
   if not settings['enabled']:return
-  encrypted=session.execute(text('SELECT webhook_url_encrypted FROM workspaces WHERE tenant_id=:tenant'),{'tenant':tenant_id}).scalar();webhook=decrypt_key(encrypted)
+  encrypted=session.execute(text('SELECT webhook_url_encrypted FROM workspaces WHERE tenant_id=:tenant'),{'tenant':tenant_id}).scalar();webhook=decrypt_key(encrypted) if encrypted else None
   policy=get_policy(session,tenant_id)
   if policy['monthly_budget'] and policy['spent_this_month']/policy['monthly_budget']*100>=settings['budget_percent']:_notify(session,tenant_id,'budget','Budget threshold reached',f"{policy['spent_this_month']:.2f} of {policy['monthly_budget']:.2f} monthly budget used.",'warning',webhook)
   if latency_ms>=settings['latency_ms']:_notify(session,tenant_id,'latency','Slow provider response',f'A request took {latency_ms} ms, above your {settings["latency_ms"]} ms threshold.','warning',webhook)

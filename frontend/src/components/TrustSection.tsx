@@ -1,0 +1,7 @@
+const answers=[
+ ['Will I need to change my application code?','No major rewrite is required. PromptCache exposes an OpenAI-compatible gateway, so you point your existing client at the gateway and use a workspace API key.'],
+ ['Do you store my provider credentials?','Provider credentials are encrypted before storage and are never returned through the dashboard after you save them.'],
+ ['How do you control access?','Workspaces are scoped to their owner. API keys can be rolled, provider connections can be removed, and sensitive workspace actions are recorded in the audit trail.'],
+ ['Can I start without a paid plan?','Yes. The Developer plan includes 10,000 requests per month and one workspace, so you can validate savings before upgrading.'],
+]
+export default function TrustSection(){return <section className='trust-section' id='security'><div className='trust-intro'><p className='eyebrow'><span className='eyebrow-dot'/>BUILT FOR PRODUCTION</p><h2>Control costs without giving up control.</h2><p>PromptCache gives operators clear ownership boundaries, practical reliability controls, and transparent request-level visibility.</p><div className='trust-points'><span>Encrypted provider credentials</span><span>Rotatable workspace API keys</span><span>Budget, rate-limit, and retry controls</span><span>Request ledger and audit history</span></div></div><div className='faq-card'><h3>Frequently asked questions</h3>{answers.map(([question,answer])=><details key={question}><summary>{question}</summary><p>{answer}</p></details>)}</div></section>}
