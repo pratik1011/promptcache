@@ -21,6 +21,7 @@ export type Metrics = {
 export type Workspace = {
   name: string
   tenant_id: string
+  role?: 'owner' | 'admin' | 'viewer'
 }
 
 export type UserInfo = {
@@ -63,3 +64,7 @@ export type Notification = { id: number; kind: string; title: string; message: s
 export type ActivationStep = { id: string; label: string; detail: string; complete: boolean }
 export type ActivationStatus = { tenant_id: string; steps: ActivationStep[]; completed: number; total: number; requests: number; cache_hits: number }
 export type AuditEvent = { id: number; tenant_id: string; user_id: number | null; action: string; target: string; detail: Record<string, unknown>; created_at: string | null }
+export type WorkspaceMember = { id: number; email: string; role: 'owner' | 'admin' | 'viewer'; created_at: string | null }
+export type MemberCandidate = { id: number; email: string }
+export type WorkspaceInvitation = { id: number; email: string; role: 'admin' | 'viewer'; expires_at: string; created_at: string; token?: string }
+export type FeedbackItem = { id: number; email: string; category: 'bug' | 'idea' | 'question' | 'other'; message: string; created_at: string }

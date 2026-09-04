@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from promptcache.production.db import SYNC_DATABASE_URL, Base
+from promptcache.production.db import SYNC_DATABASE_URL, Base, sync_database_url
 
 config = context.config
 if config.config_file_name is not None:
@@ -15,7 +15,7 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    return os.getenv("DATABASE_URL", SYNC_DATABASE_URL).replace("+asyncpg", "+psycopg")
+    return sync_database_url(os.getenv("DATABASE_URL", SYNC_DATABASE_URL))
 
 
 def run_migrations_offline() -> None:

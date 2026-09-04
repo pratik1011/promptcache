@@ -12,7 +12,11 @@
     restart: unless-stopped
   frontend:
     build: ./frontend
-    ports: ["127.0.0.1:5173:80"]
+    ports: ["127.0.0.1:5173:10000"]
+    environment:
+      API_HOST: api
+      API_PORT: 8787
+
     depends_on:
       api: { condition: service_started }
     restart: unless-stopped

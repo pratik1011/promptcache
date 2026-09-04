@@ -1,0 +1,41 @@
+# Free-pilot API blueprint. The dashboard is deployed separately to Cloudflare Pages.
+services:
+  - type: web
+    name: promptcache-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_API_KEY
+        generateValue: true
+      - key: API_KEY_ENC_MASTER_KEY
+        sync: false
+      - key: EMBEDDING_PROVIDER
+        value: deterministic
+      - key: PII_REDACTION
+        value: 1
+      - key: LOG_FORMAT
+        value: json
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: DASHBOARD_URL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_STARTUP
+        sync: false
+      - key: STRIPE_PRICE_GROWTH
+        sync: false
+      - key: STRIPE_PRICE_SCALE
+        sync: false

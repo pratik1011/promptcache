@@ -1,6 +1,6 @@
-import type { ActivationStatus, AlertSettings, AuditEvent, BillingSummary, Metrics, Notification, ProviderConnection, ProviderPreset, ReliabilityPolicy, RequestLedger, UserInfo, RevealedKey } from '../types'
+import type { ActivationStatus, AlertSettings, AuditEvent, BillingSummary, FeedbackItem, MemberCandidate, Metrics, Notification, ProviderConnection, ProviderPreset, ReliabilityPolicy, RequestLedger, UserInfo, RevealedKey, WorkspaceInvitation, WorkspaceMember } from '../types'
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8787'
+const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://127.0.0.1:8787' : '')
 
 export const money = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4 }).format(v || 0)
@@ -87,6 +87,8 @@ export async function fetchMetrics(token: string): Promise<Metrics> {
   return r.json()
 }
 
+export async function fetchWorkspaceMetrics(token:string,tenantId:string):Promise<Metrics>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/metrics`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load workspace metrics');return r.json()}
+
 export async function fetchProviders(): Promise<{id: string; type: string; model: string}[]> {
   const r = await fetch(`${API_URL}/health`)
   if (!r.ok) throw new Error('Unable to fetch provider catalog')
@@ -165,3 +167,14 @@ export async function fetchNotifications(token:string,tenantId:string):Promise<N
 export async function markNotificationRead(token:string,tenantId:string,id:number):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/notifications/${id}/read`,{method:'POST',headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to update notification')}
 export async function fetchActivation(token:string,tenantId:string):Promise<ActivationStatus>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/activation`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load activation status');return r.json()}
 export async function fetchAuditEvents(token:string,tenantId:string):Promise<AuditEvent[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/audit?limit=100`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load audit history');return (await r.json()).events}
+export async function fetchWorkspaceMembers(token:string,tenantId:string):Promise<WorkspaceMember[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/members`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load team');return (await r.json()).members}
+export async function searchMemberCandidates(token:string,tenantId:string,query:string):Promise<MemberCandidate[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/member-candidates?q=${encodeURIComponent(query)}`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to search registered accounts');return (await r.json()).users}
+export async function fetchWorkspaceInvitations(token:string,tenantId:string):Promise<WorkspaceInvitation[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/invitations`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load invitations');return (await r.json()).invitations}
+export async function createWorkspaceInvitation(token:string,tenantId:string,email:string,role:'admin'|'viewer'):Promise<WorkspaceInvitation>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/invitations`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({email,role})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to create invitation');return d}
+export async function revokeWorkspaceInvitation(token:string,tenantId:string,id:number):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/invitations/${id}`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to revoke invitation')}
+export async function acceptWorkspaceInvitation(token:string,inviteToken:string):Promise<void>{const r=await fetch(`${API_URL}/v1/invitations/${encodeURIComponent(inviteToken)}/accept`,{method:'POST',headers:{Authorization:`Bearer ${token}`}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to accept invitation')}
+export async function submitFeedback(token:string,tenantId:string,category:'bug'|'idea'|'question'|'other',message:string):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/feedback`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({category,message})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to send feedback')}
+export async function fetchFeedback(token:string,tenantId:string):Promise<FeedbackItem[]>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/feedback`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to load feedback');return (await r.json()).feedback}
+export async function inviteWorkspaceMember(token:string,tenantId:string,email:string,role:'admin'|'viewer'):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/members`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({email,role})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Unable to invite member')}
+export async function updateWorkspaceMember(token:string,tenantId:string,id:number,email:string,role:'admin'|'viewer'):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/members/${id}`,{method:'PUT',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({email,role})});if(!r.ok)throw new Error('Unable to update member')}
+export async function removeWorkspaceMember(token:string,tenantId:string,id:number):Promise<void>{const r=await fetch(`${API_URL}/v1/workspaces/${tenantId}/members/${id}`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to remove member')}

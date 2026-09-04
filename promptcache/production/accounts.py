@@ -7,6 +7,7 @@ import jwt
 
 from sqlalchemy import text
 from .config import jwt_secret
+from .members import workspace_rows
 
 def password_hash(password: str) -> str:
     salt=secrets.token_bytes(16); digest=hashlib.scrypt(password.encode(),salt=salt,n=16384,r=8,p=1); return salt.hex()+":"+digest.hex()
@@ -30,5 +31,6 @@ def login(session, email: str, password: str) -> str:
     if not row or not verify_password(password,row["password_hash"]): raise ValueError("Invalid credentials")
     return jwt.encode({"sub":str(row["id"]),"exp":datetime.now(UTC)+timedelta(hours=8)},jwt_secret(),algorithm="HS256")
 def current_user(session, token: str):
+    return workspace_rows(session,int(jwt.decode(token,jwt_secret(),algorithms=['HS256'])['sub']))
     payload=jwt.decode(token,jwt_secret(),algorithms=["HS256"])
     return session.execute(text("SELECT u.email,w.name,w.tenant_id FROM users u LEFT JOIN workspaces w ON w.owner_id=u.id WHERE u.id=:id"),{"id":int(payload["sub"])}).mappings().all()

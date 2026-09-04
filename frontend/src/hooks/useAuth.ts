@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { Notice, NoticeType, UserInfo } from '../types'
-import { fetchMe, login as apiLogin, signup as apiSignup, createWorkspace as apiCreateWorkspace, regenerateKey as apiRegenerateKey, revealWorkspaceKeys } from '../lib/api'
+import { acceptWorkspaceInvitation, fetchMe, login as apiLogin, signup as apiSignup, createWorkspace as apiCreateWorkspace, regenerateKey as apiRegenerateKey, revealWorkspaceKeys } from '../lib/api'
 
 const TOKEN_KEY = 'promptcache_token'
 
@@ -17,6 +17,19 @@ export function useAuth() {
     window.setTimeout(() => setNotice(null), 5000)
   }, [])
 
+  const acceptPendingInvitation = useCallback(async (accessToken: string) => {
+    const inviteToken = new URLSearchParams(window.location.search).get('invite')
+    if (!inviteToken) return false
+    try {
+      await acceptWorkspaceInvitation(accessToken, inviteToken)
+      window.history.replaceState({}, '', window.location.pathname)
+      return true
+    } catch (err) {
+      showNotice('error', err instanceof Error ? err.message : 'Unable to accept invitation.')
+      return false
+    }
+  }, [showNotice])
+
   // Workspace API keys are revealed on demand (metrics load or explicit reveal),
   // never bulk-shipped to the browser on every login.
 
@@ -27,10 +40,11 @@ export function useAuth() {
         const res = await apiSignup(email, password)
         sessionStorage.setItem(TOKEN_KEY, res.access_token)
         setToken(res.access_token)
+        const joined = await acceptPendingInvitation(res.access_token)
         const me = await fetchMe(res.access_token)
         setUser(me)
         setRestored(true)
-        showNotice('success', `Welcome, ${me.email.split('@')[0]}! Your account is ready.`)
+        showNotice('success', joined ? 'Your invitation was accepted. Welcome to the workspace!' : `Welcome, ${me.email.split('@')[0]}! Your account is ready.`)
         return true
       } catch (err) {
         showNotice('error', err instanceof Error ? err.message : 'Network error. Please try again.')
@@ -39,7 +53,7 @@ export function useAuth() {
         setLoading(null)
       }
     },
-    [showNotice],
+    [acceptPendingInvitation, showNotice],
   )
 
   const createWorkspace = useCallback(
@@ -97,10 +111,11 @@ export function useAuth() {
         const res = await apiLogin(email, password)
         sessionStorage.setItem(TOKEN_KEY, res.access_token)
         setToken(res.access_token)
+        const joined = await acceptPendingInvitation(res.access_token)
         const me = await fetchMe(res.access_token)
         setUser(me)
         setRestored(true)
-        showNotice('success', `Welcome back, ${me.email.split('@')[0]}!`)
+        showNotice('success', joined ? 'Your invitation was accepted. Welcome to the workspace!' : `Welcome back, ${me.email.split('@')[0]}!`)
         return true
       } catch (err) {
         showNotice('error', err instanceof Error ? err.message : 'Network error. Please try again.')
@@ -109,7 +124,7 @@ export function useAuth() {
         setLoading(null)
       }
     },
-    [showNotice],
+    [acceptPendingInvitation, showNotice],
   )
 
   const restoreSession = useCallback(async () => {
@@ -121,6 +136,7 @@ export function useAuth() {
       return
     }
     try {
+      await acceptPendingInvitation(stored)
       const me = await fetchMe(stored)
       setToken(stored)
       setUser(me)
@@ -131,7 +147,7 @@ export function useAuth() {
       setRestored(true)
       setLoading(null)
     }
-  }, [])
+  }, [acceptPendingInvitation])
 
   const logout = useCallback(() => {
     sessionStorage.removeItem(TOKEN_KEY)

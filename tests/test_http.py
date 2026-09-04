@@ -56,6 +56,14 @@ CREATE TABLE workspaces (
   cache_hit_alert_percent INTEGER NOT NULL DEFAULT 20,
   webhook_url_encrypted TEXT
 );
+CREATE TABLE workspace_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (tenant_id, user_id)
+);
 CREATE TABLE api_keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tenant_id TEXT NOT NULL,

@@ -38,6 +38,11 @@ curl -X POST http://localhost:8787/v1/chat/completions \
 
 Send the same prompt again to see a cache hit. For production, copy `.env.example` into your deployment environment and configure `PROVIDERS_JSON`, `ROUTES_JSON`, and `ADMIN_API_KEY`.
 
+
+## Deploy to Render
+
+A Render Blueprint is included at `render.yaml`. It provisions the API, React/Nginx dashboard, Postgres, and a private Render Key Value instance. Follow the complete setup and smoke-test guide in [`docs/render-deployment.md`](docs/render-deployment.md).
+
 ## Universal provider contract
 
 Clients always receive an OpenAI-style response, regardless of the upstream vendor. Configure providers with one of these adapter types:

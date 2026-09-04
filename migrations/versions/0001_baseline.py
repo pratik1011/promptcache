@@ -20,6 +20,7 @@ depends_on = None
 def upgrade() -> None:
     from promptcache.production.db import Base
 
+    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
     Base.metadata.create_all(bind=op.get_bind())
 
 

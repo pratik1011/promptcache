@@ -7,8 +7,20 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from pgvector.sqlalchemy import Vector
 
+
+def sync_database_url(url: str) -> str:
+    """Normalize supported PostgreSQL URLs to SQLAlchemy's Psycopg 3 driver."""
+    if url.startswith("postgresql+asyncpg://"):
+        return url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url
+
+
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://promptcache:promptcache-dev@localhost:5432/promptcache")
-SYNC_DATABASE_URL = DATABASE_URL.replace("+asyncpg", "+psycopg")
+SYNC_DATABASE_URL = sync_database_url(DATABASE_URL)
 engine = create_engine(SYNC_DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -84,6 +96,10 @@ def initialize_database() -> None:
             conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT'))
             conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT'))
             conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMPTZ'))
+            conn.execute(text('CREATE TABLE IF NOT EXISTS workspace_members (id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES workspaces(tenant_id) ON DELETE CASCADE, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), UNIQUE (tenant_id,user_id))'))
+            conn.execute(text('CREATE INDEX IF NOT EXISTS workspace_members_user_idx ON workspace_members(user_id,tenant_id)'))
+            conn.execute(text('CREATE TABLE IF NOT EXISTS workspace_invitations (id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES workspaces(tenant_id) ON DELETE CASCADE, email TEXT NOT NULL, role TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, inviter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL, accepted_at TIMESTAMPTZ, revoked_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())'))
+            conn.execute(text('CREATE INDEX IF NOT EXISTS workspace_invitations_tenant_idx ON workspace_invitations(tenant_id,email)'))
             conn.execute(text('''CREATE TABLE IF NOT EXISTS workspace_providers (
                 id BIGSERIAL PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES workspaces(tenant_id) ON DELETE CASCADE,
                 provider_type TEXT NOT NULL, name TEXT NOT NULL, base_url TEXT NOT NULL, model TEXT NOT NULL,
@@ -123,6 +139,10 @@ def initialize_database() -> None:
                 detail JSONB NOT NULL DEFAULT '{}'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now())'''))
             conn.execute(text('CREATE INDEX IF NOT EXISTS audit_log_tenant_idx ON audit_log (tenant_id, id DESC)'))
+            conn.execute(text('CREATE TABLE IF NOT EXISTS product_feedback (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, tenant_id TEXT REFERENCES workspaces(tenant_id) ON DELETE CASCADE, category TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())'))
+            conn.execute(text('ALTER TABLE product_feedback ADD COLUMN IF NOT EXISTS tenant_id TEXT REFERENCES workspaces(tenant_id) ON DELETE CASCADE'))
+            conn.execute(text('CREATE INDEX IF NOT EXISTS product_feedback_created_idx ON product_feedback(created_at DESC)'))
+            conn.execute(text('CREATE INDEX IF NOT EXISTS product_feedback_tenant_idx ON product_feedback(tenant_id, created_at DESC)'))
     except Exception as exc:
         # workspaces table is provisioned by schema.sql in production deployments;
         # log instead of silently swallowing real migration failures. The audit

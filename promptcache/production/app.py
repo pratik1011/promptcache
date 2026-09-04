@@ -22,6 +22,9 @@ from .provider_connections import (PRESETS, delete_connection, list_connections,
 from ..providers.adapters import embed_provider
 from .reliability import enforce_budget, get_policy, update_policy
 from .alerts import get_alert_settings, list_notifications, mark_read, save_alert_settings
+from .members import ROLE_RANK, accept_invitation, add_member, change_member_role, create_invitation, list_invitations, list_members, remove_member, revoke_invitation, role_for, search_members
+from .email_delivery import send_invitation
+from .routers.collaboration import router as collaboration_router
 from ..config.settings import load_settings
 from .audit import list_audit, record_audit
 from .observability import RequestIdMiddleware, configure_logging
@@ -56,6 +59,17 @@ app.add_middleware(
 )
 # X-Request-ID on every response + structured access log (JSON when LOG_FORMAT=json).
 app.add_middleware(RequestIdMiddleware)
+@app.get('/health/ready')
+def readiness():
+ try:
+  with SessionLocal() as session: session.execute(text('SELECT 1'))
+ except Exception as exc:
+  logger.warning('readiness database check failed: %s',exc)
+  raise HTTPException(503,'Service is not ready') from exc
+ return {'ok':True}
+
+app.include_router(collaboration_router)
+
 class CompletionRequest(BaseModel):
     # extra="allow": unknown OpenAI params (max_tokens, tools, response_format,
     # stop, seed, ...) flow through model_dump() into the gateway instead of
@@ -152,6 +166,13 @@ def metrics(authorization:str|None=Header(default=None)):
 
 
 
+
+@app.get('/v1/workspaces/{tenant_id}/metrics')
+def workspace_metrics(tenant_id: str, authorization: str | None = Header(default=None)):
+ user_id=user_id_from_token(authorization)
+ with SessionLocal() as session:
+  require_workspace(session,tenant_id,user_id)
+  return UsageRepository(session).totals(tenant_id)
 
 class CreateKeyRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=255)
@@ -404,6 +425,12 @@ def workspace_activation(tenant_id: str, authorization: str | None = Header(defa
         ]
         return {'tenant_id':tenant_id,'steps':steps,'completed':sum(step['complete'] for step in steps),'total':len(steps),'requests':requests,'cache_hits':cached}
 
+def require_workspace(session, tenant_id: str, user_id: int, minimum_role: str='viewer') -> str:
+    role=role_for(session,tenant_id,user_id)
+    if not role: raise HTTPException(404,'Workspace not found')
+    if ROLE_RANK[role] < ROLE_RANK[minimum_role]: raise HTTPException(403,'Insufficient workspace role')
+    return role
+
 @app.get('/v1/workspaces/{tenant_id}/alerts')
 def get_workspace_alerts(tenant_id: str, authorization: str | None = Header(default=None)):
     user_id=user_id_from_token(authorization)
@@ -415,7 +442,7 @@ def get_workspace_alerts(tenant_id: str, authorization: str | None = Header(defa
 def set_workspace_alerts(tenant_id: str, request: AlertSettingsRequest, authorization: str | None = Header(default=None)):
     user_id=user_id_from_token(authorization)
     with SessionLocal() as session:
-        require_workspace(session,tenant_id,user_id)
+        require_workspace(session,tenant_id,user_id,'admin')
         try: result=save_alert_settings(session,tenant_id,request.model_dump())
         except ValueError as exc: raise HTTPException(400,str(exc)) from exc
         record_audit(session,'alerts.update',tenant_id=tenant_id,user_id=user_id,detail={'enabled':request.enabled})
@@ -458,7 +485,7 @@ def get_workspace_reliability(tenant_id: str, authorization: str | None = Header
 def set_workspace_reliability(tenant_id: str, request: ReliabilityRequest, authorization: str | None = Header(default=None)):
     user_id=user_id_from_token(authorization)
     with SessionLocal() as session:
-        require_workspace(session,tenant_id,user_id)
+        require_workspace(session,tenant_id,user_id,'admin')
         return update_policy(session,tenant_id,request.model_dump())
 
 @app.post('/v1/workspaces/{tenant_id}/providers')
@@ -466,7 +493,7 @@ def connect_workspace_provider(tenant_id: str, request: ProviderConnectionReques
     user_id=user_id_from_token(authorization)
     if request.provider_type not in PRESETS: raise HTTPException(400,'Unsupported provider type')
     with SessionLocal() as session:
-        require_workspace(session,tenant_id,user_id)
+        require_workspace(session,tenant_id,user_id,'admin')
         connection = save_connection(session,tenant_id,request.model_dump())
         record_audit(session, "provider.connect", tenant_id=tenant_id, user_id=user_id,
                      target=str(connection.get("id")), detail={"provider_type": request.provider_type})
@@ -475,7 +502,7 @@ def connect_workspace_provider(tenant_id: str, request: ProviderConnectionReques
 @app.post('/v1/workspaces/{tenant_id}/providers/test')
 def test_workspace_provider(tenant_id: str, request: ProviderConnectionRequest, authorization: str | None = Header(default=None)):
     user_id=user_id_from_token(authorization)
-    with SessionLocal() as session: require_workspace(session,tenant_id,user_id)
+    with SessionLocal() as session: require_workspace(session,tenant_id,user_id,'admin')
     try: return test_values(request.model_dump())
     except Exception as exc: raise HTTPException(400,f'Connection failed: {exc}') from exc
 
@@ -483,7 +510,7 @@ def test_workspace_provider(tenant_id: str, request: ProviderConnectionRequest, 
 def disconnect_workspace_provider(tenant_id: str, connection_id: int, authorization: str | None = Header(default=None)):
     user_id=user_id_from_token(authorization)
     with SessionLocal() as session:
-        require_workspace(session,tenant_id,user_id)
+        require_workspace(session,tenant_id,user_id,'admin')
         if not delete_connection(session,tenant_id,connection_id): raise HTTPException(404,'Provider connection not found')
         record_audit(session, "provider.disconnect", tenant_id=tenant_id, user_id=user_id, target=str(connection_id))
     return {'deleted':True}

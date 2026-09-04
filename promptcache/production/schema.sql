@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS audit_log_tenant_idx ON audit_log (tenant_id, id DESC);
 
+CREATE TABLE IF NOT EXISTS product_feedback (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  tenant_id TEXT NOT NULL REFERENCES workspaces(tenant_id) ON DELETE CASCADE,
+  category TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS product_feedback_created_idx ON product_feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS product_feedback_tenant_idx ON product_feedback(tenant_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS api_keys (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,
@@ -100,6 +111,31 @@ CREATE TABLE IF NOT EXISTS workspaces (
   baseline_provider TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS workspace_members (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES workspaces(tenant_id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (tenant_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS workspace_members_user_idx ON workspace_members(user_id, tenant_id);
+
+CREATE TABLE IF NOT EXISTS workspace_invitations (
+  id BIGSERIAL PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES workspaces(tenant_id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'viewer')),
+  token_hash TEXT NOT NULL UNIQUE,
+  inviter_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  accepted_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS workspace_invitations_tenant_idx ON workspace_invitations(tenant_id, email);
+
 
 CREATE TABLE IF NOT EXISTS workspace_providers (
   id BIGSERIAL PRIMARY KEY,

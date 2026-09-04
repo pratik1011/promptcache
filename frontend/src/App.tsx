@@ -29,7 +29,7 @@ export default function App() {
   }
 
   return (
-    <main>
+    <main className={isAuthenticated ? 'authenticated-app' : undefined}>
       {!isAuthenticated && <Header isAuthenticated={false} user={null} onLogout={logout} />}
 
       {notice && (

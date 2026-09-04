@@ -26,6 +26,7 @@ export default function BillingPanel({ token }: { token: string }) {
     <div className='usage-line'><span>Monthly requests</span><b>{billing.requests_used.toLocaleString()} / {billing.requests_limit.toLocaleString()}</b></div>
     <div className='billing-progress'><i style={{ width: `${percent}%` }} /></div>
     <div className='usage-line'><span>Workspaces</span><b>{billing.workspaces_used} / {billing.workspaces_limit}</b></div>
+    {!billing.stripe_enabled && <div className='billing-setup'><b>Payments are in setup mode</b><span>Add Stripe test keys and Price IDs to enable upgrades. Your current plan limits are active.</span></div>}
     {error && <p className='billing-error'>{error}</p>}
     <div className='plan-grid'>{billing.plans.filter((p) => p.id !== 'developer').map((plan) => <div className={billing.plan === plan.id ? 'current' : ''} key={plan.id}><b>{plan.name}</b><strong>${plan.price}<small>/mo</small></strong><span>{plan.requests.toLocaleString()} requests</span><button disabled={!plan.configured || billing.plan === plan.id || Boolean(busy)} onClick={() => void checkout(plan.id)}>{billing.plan === plan.id ? 'Current plan' : !plan.configured ? 'Coming soon' : busy === plan.id ? 'Opening…' : 'Upgrade'}</button></div>)}</div>
     {billing.has_billing_account && <button className='portal-button' disabled={Boolean(busy)} onClick={() => void portal()}>Manage billing & invoices</button>}

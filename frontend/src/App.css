@@ -5,6 +5,15 @@ main {
   padding: var(--space-lg);
 }
 
+/* The product console deliberately escapes the marketing page container. */
+main.authenticated-app {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
 /* ─── Splash Screen ─────────────────────────────────────────────────────── */
 .splash-screen {
   min-height: 100vh;
