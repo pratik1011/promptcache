@@ -19,6 +19,8 @@ services:
         generateValue: true
       - key: API_KEY_ENC_MASTER_KEY
         sync: false
+      - key: API_KEY_HASH_SALT
+        generateValue: true
       - key: EMBEDDING_PROVIDER
         value: deterministic
       - key: PII_REDACTION
