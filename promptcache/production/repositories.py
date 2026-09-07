@@ -138,6 +138,9 @@ class CacheRepository:
         self.session.add(record)
         self.session.commit()
         self.session.refresh(record)
+        if record.semantic_scope == 'exact-only':
+            from .scope_jobs import enqueue_scope_enrichment
+            enqueue_scope_enrichment(record.id, record.prompt)
         return record
 
 def purge_cache(session, tenant_id: str) -> int:
