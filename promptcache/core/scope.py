@@ -111,13 +111,15 @@ def _has_unknown_named_entity(text: str, references: tuple[str, ...]) -> bool:
     return False
 
 
-def resolve_semantic_scope(messages: list[dict[str, Any]]) -> SemanticScope:
+def resolve_semantic_scope(messages: list[dict[str, Any]], allow_model: bool = False) -> SemanticScope:
     '''Create a conservative cache boundary without an LLM call.'''
     text = _message_text(messages)
     operation = _operation(text)
     references = _references(text)
     filters = _filters(text)
     if not references and _has_unknown_named_entity(text, references):
+        if not allow_model:
+            return SemanticScope(None, operation, references, filters, 'unresolved_named_entity')
         extracted = extract_references(text)
         if extracted is None:
             return SemanticScope(None, operation, references, filters, 'unresolved_named_entity')

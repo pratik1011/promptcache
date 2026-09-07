@@ -28,7 +28,7 @@ def _embedding_provider():
 
 def _enrich(record_id: int, prompt: str) -> None:
     try:
-        scope = resolve_semantic_scope([{'role': 'user', 'content': prompt}])
+        scope = resolve_semantic_scope([{'role': 'user', 'content': prompt}], allow_model=True)
         if not scope.enabled:
             return
         embedder = _embedding_provider()

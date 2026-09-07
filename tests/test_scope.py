@@ -22,7 +22,7 @@ def test_multiple_sources_are_order_independent():
 
 
 def test_unknown_named_entity_disables_semantic_caching():
-    result = scope('Prepare a research brief for Acme Robotics')
+    result = resolve_semantic_scope([{'role': 'user', 'content': 'Prepare a research brief for Acme Robotics'}], allow_model=True)
     assert not result.enabled
     assert result.reason == 'unresolved_named_entity'
 
@@ -30,7 +30,10 @@ def test_unknown_named_entity_disables_semantic_caching():
 def test_model_extraction_can_scope_an_unknown_entity(monkeypatch):
     from promptcache.core.scope_extractors import ModelExtraction
     monkeypatch.setattr('promptcache.core.scope.extract_references', lambda text: ModelExtraction(('entity:acme_robotics',), 0.95, 'local_ner'))
-    result = scope('Prepare a research brief for Acme Robotics')
+    result = resolve_semantic_scope(
+        [{'role': 'user', 'content': 'Prepare a research brief for Acme Robotics'}],
+        allow_model=True,
+    )
     assert result.enabled
     assert result.references == ('entity:acme_robotics',)
 
