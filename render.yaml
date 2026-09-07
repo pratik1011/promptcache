@@ -22,7 +22,9 @@ services:
       - key: API_KEY_HASH_SALT
         generateValue: true
       - key: EMBEDDING_PROVIDER
-        value: deterministic
+        value: fastembed
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-small-en-v1.5
       - key: PII_REDACTION
         value: 1
       - key: LOG_FORMAT
