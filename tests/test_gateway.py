@@ -45,7 +45,7 @@ class SilentCache:
     def exact(self, tenant_id, cache_key):
         return None
 
-    def semantic(self, tenant_id, vector, limit=5):
+    def semantic(self, tenant_id, vector, cache_namespace='default', limit=5):
         raise RuntimeError("vector index unavailable")
 
     def save(self, **values):
@@ -76,7 +76,7 @@ class GatewayFailOpenTests(unittest.TestCase):
         class RecordingCache(SilentCache):
             semantic_calls = 0
 
-            def semantic(self, tenant_id, vector, limit=5):
+            def semantic(self, tenant_id, vector, cache_namespace='default', limit=5):
                 RecordingCache.semantic_calls += 1
                 raise AssertionError("semantic lookup must not run without an embedder")
 
@@ -85,6 +85,27 @@ class GatewayFailOpenTests(unittest.TestCase):
             complete({"messages": [{"role": "user", "content": "hello world"}]},
                      "ws_disabled", SETTINGS, self.session)
         self.assertEqual(RecordingCache.semantic_calls, 0)
+
+    def test_semantic_lookup_uses_the_request_namespace(self):
+        class Embedder:
+            def embed(self, prompt):
+                return [0.1] * 384
+
+        class RecordingCache(SilentCache):
+            namespace = None
+
+            def semantic(self, tenant_id, vector, cache_namespace='default', limit=5):
+                RecordingCache.namespace = cache_namespace
+                return []
+
+        with patch('promptcache.production.gateway.CacheRepository', RecordingCache), \
+             patch('promptcache.production.gateway._get_embedder', return_value=Embedder()):
+            complete(
+                {'messages': [{'role': 'user', 'content': 'namespace check'}],
+                 'cache_namespace': 'project-a'},
+                'ws_namespace', SETTINGS, self.session,
+            )
+        self.assertEqual(RecordingCache.namespace, 'project-a')
 
     def test_request_still_succeeds_without_cache_table(self):
         request = {"messages": [{"role": "user", "content": "summarize quarterly results"}]}

@@ -48,7 +48,9 @@ def complete(request, tenant, settings, session):
     context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature"),
                "tools": repr(request.get("tools")), "response_format": repr(request.get("response_format"))}
     cache_key = key(prompt, request.get("cache_namespace", "default"), context)
-    cache, usage = CacheRepository(session), UsageRepository(session)
+    cache_namespace = request.get('cache_namespace', 'default')
+    cache_key = key(prompt, cache_namespace, context)
+    cache, usage = CacheRepository(session), UsageRepository(session); cache.cache_namespace = cache_namespace
     caching = bool(request.get("cache", True)) and not contains_secret(request)
     vector = None
     hit = cache.exact(tenant, cache_key) if caching else None
@@ -58,7 +60,7 @@ def complete(request, tenant, settings, session):
             embedder = _get_embedder()
             if embedder is not None:
                 vector = embedder.embed(prompt)
-                match = next(((record, score) for record, score in cache.semantic(tenant, vector)
+                match = next(((record, score) for record, score in cache.semantic(tenant, vector, cache_namespace=cache_namespace)
                               if record.provider == provider["id"] and float(score) >= settings.similarity_threshold), None)
                 if match: hit, semantic_score = match
         except Exception:
@@ -116,7 +118,8 @@ def stream_complete(request, tenant, settings, session):
     context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature"),
                "tools": repr(request.get("tools")), "response_format": repr(request.get("response_format"))}
     cache_key = key(prompt, request.get("cache_namespace", "default"), context)
-    cache, usage = CacheRepository(session), UsageRepository(session)
+    cache_namespace = request.get('cache_namespace', 'default')
+    cache, usage = CacheRepository(session), UsageRepository(session); cache.cache_namespace = cache_namespace
     caching = bool(request.get("cache", True)) and not contains_secret(request)
     hit = cache.exact(tenant, cache_key) if caching else None
     if hit:

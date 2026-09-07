@@ -2,6 +2,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS cache_records (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,
+  cache_namespace TEXT NOT NULL DEFAULT 'default',
   cache_key TEXT NOT NULL,
   prompt TEXT NOT NULL,
   response JSONB NOT NULL,
@@ -13,6 +14,7 @@ CREATE TABLE IF NOT EXISTS cache_records (
   UNIQUE (tenant_id, cache_key)
 );
 CREATE INDEX IF NOT EXISTS cache_records_tenant_idx ON cache_records (tenant_id);
+CREATE INDEX IF NOT EXISTS cache_records_tenant_namespace_idx ON cache_records (tenant_id, cache_namespace);
 CREATE TABLE IF NOT EXISTS usage_events (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,
