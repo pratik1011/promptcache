@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta, UTC
 from sqlalchemy import text
 from ..cache.semantic import key, normalize_prompt
+from ..core.scope import resolve_semantic_scope
 from ..core.safety import contains_secret, pii_redaction_enabled, redact_pii
 from ..providers.adapters import cache_chunks, call_provider, stream_provider, tokens
 from ..providers.protocol import StreamCapture, upstream_body
@@ -45,22 +46,23 @@ def complete(request, tenant, settings, session):
     provider, complexity = select_provider(messages, settings.providers, settings.routes, request.get("provider"))
     # Tool calling / JSON mode change the output for an identical prompt, so the
     # cache context must distinguish them (parity with the demo gateway).
+    scope = resolve_semantic_scope(messages)
     context = {"provider": provider["id"], "model": provider.get("model"), "temperature": request.get("temperature"),
                "tools": repr(request.get("tools")), "response_format": repr(request.get("response_format"))}
     cache_key = key(prompt, request.get("cache_namespace", "default"), context)
     cache_namespace = request.get('cache_namespace', 'default')
     cache_key = key(prompt, cache_namespace, context)
-    cache, usage = CacheRepository(session), UsageRepository(session); cache.cache_namespace = cache_namespace
+    cache, usage = CacheRepository(session), UsageRepository(session); cache.cache_namespace = cache_namespace; cache.semantic_scope = scope.fingerprint or 'exact-only'
     caching = bool(request.get("cache", True)) and not contains_secret(request)
     vector = None
     hit = cache.exact(tenant, cache_key) if caching else None
     semantic_score = None
-    if hit is None and caching:
+    if hit is None and caching and scope.enabled:
         try:
             embedder = _get_embedder()
             if embedder is not None:
                 vector = embedder.embed(prompt)
-                match = next(((record, score) for record, score in cache.semantic(tenant, vector, cache_namespace=cache_namespace)
+                match = next(((record, score) for record, score in cache.semantic(tenant, vector, cache_namespace=cache_namespace, semantic_scope=scope.fingerprint)
                               if record.provider == provider["id"] and float(score) >= settings.similarity_threshold), None)
                 if match: hit, semantic_score = match
         except Exception:
@@ -119,7 +121,8 @@ def stream_complete(request, tenant, settings, session):
                "tools": repr(request.get("tools")), "response_format": repr(request.get("response_format"))}
     cache_key = key(prompt, request.get("cache_namespace", "default"), context)
     cache_namespace = request.get('cache_namespace', 'default')
-    cache, usage = CacheRepository(session), UsageRepository(session); cache.cache_namespace = cache_namespace
+    scope = resolve_semantic_scope(messages)
+    cache, usage = CacheRepository(session), UsageRepository(session); cache.cache_namespace = cache_namespace; cache.semantic_scope = scope.fingerprint or 'exact-only'
     caching = bool(request.get("cache", True)) and not contains_secret(request)
     hit = cache.exact(tenant, cache_key) if caching else None
     if hit:

@@ -98,6 +98,8 @@ class ProductionStreamTests(unittest.TestCase):
     CREATE TABLE cache_records (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id TEXT NOT NULL,
+      cache_namespace TEXT NOT NULL DEFAULT 'default',
+      semantic_scope TEXT NOT NULL DEFAULT 'legacy-unscoped',
       cache_key TEXT NOT NULL,
       prompt TEXT NOT NULL,
       response TEXT NOT NULL,

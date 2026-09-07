@@ -11,13 +11,13 @@ class ProductionService:
     embedding_provider: Any | None = None
     hot_cache: Any | None = None
 
-    def semantic_lookup(self, tenant_id: str, vector: list[float], cache_namespace: str = 'default', limit: int = 1) -> list[dict[str, Any]]:
+    def semantic_lookup(self, tenant_id: str, vector: list[float], cache_namespace: str = 'default', semantic_scope: str = 'legacy-unscoped', limit: int = 1) -> list[dict[str, Any]]:
         """Delegate vector lookup to the configured repository."""
         if self.embedding_provider is None:
             return []
         return [
             {"prompt": record.prompt, "provider": record.provider, "similarity": float(score)}
-            for record, score in self.cache.semantic(tenant_id, vector, cache_namespace=cache_namespace, limit=limit)
+            for record, score in self.cache.semantic(tenant_id, vector, cache_namespace=cache_namespace, semantic_scope=semantic_scope, limit=limit)
         ]
 
     def record_usage(self, **event: Any) -> None:

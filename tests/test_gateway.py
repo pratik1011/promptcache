@@ -45,7 +45,7 @@ class SilentCache:
     def exact(self, tenant_id, cache_key):
         return None
 
-    def semantic(self, tenant_id, vector, cache_namespace='default', limit=5):
+    def semantic(self, tenant_id, vector, cache_namespace='default', semantic_scope='legacy-unscoped', limit=5):
         raise RuntimeError("vector index unavailable")
 
     def save(self, **values):
@@ -76,7 +76,7 @@ class GatewayFailOpenTests(unittest.TestCase):
         class RecordingCache(SilentCache):
             semantic_calls = 0
 
-            def semantic(self, tenant_id, vector, cache_namespace='default', limit=5):
+            def semantic(self, tenant_id, vector, cache_namespace='default', semantic_scope='legacy-unscoped', limit=5):
                 RecordingCache.semantic_calls += 1
                 raise AssertionError("semantic lookup must not run without an embedder")
 
@@ -94,7 +94,7 @@ class GatewayFailOpenTests(unittest.TestCase):
         class RecordingCache(SilentCache):
             namespace = None
 
-            def semantic(self, tenant_id, vector, cache_namespace='default', limit=5):
+            def semantic(self, tenant_id, vector, cache_namespace='default', semantic_scope='legacy-unscoped', limit=5):
                 RecordingCache.namespace = cache_namespace
                 return []
 

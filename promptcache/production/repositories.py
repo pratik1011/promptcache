@@ -120,11 +120,12 @@ class CacheRepository:
         )
         return self.session.scalar(query)
 
-    def semantic(self, tenant_id: str, embedding: list[float], cache_namespace: str = 'default', limit: int = 5) -> list[tuple[CacheRecord, float]]:
+    def semantic(self, tenant_id: str, embedding: list[float], cache_namespace: str = 'default', semantic_scope: str = 'legacy-unscoped', limit: int = 5) -> list[tuple[CacheRecord, float]]:
         """Return non-expired tenant records ordered by cosine similarity."""
         query = select(CacheRecord, (1 - CacheRecord.embedding.cosine_distance(embedding)).label("similarity")).where(
             CacheRecord.tenant_id == tenant_id,
             CacheRecord.cache_namespace == cache_namespace,
+            CacheRecord.semantic_scope == semantic_scope,
             CacheRecord.expires_at > datetime.now(UTC),
             CacheRecord.embedding.is_not(None),
         ).order_by(text("similarity DESC")).limit(limit)
@@ -132,6 +133,7 @@ class CacheRepository:
 
     def save(self, **values) -> CacheRecord:
         values.setdefault('cache_namespace', getattr(self, 'cache_namespace', 'default'))
+        values.setdefault('semantic_scope', getattr(self, 'semantic_scope', 'legacy-unscoped'))
         record = CacheRecord(**values)
         self.session.add(record)
         self.session.commit()

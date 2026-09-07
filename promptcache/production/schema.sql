@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS cache_records (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,
   cache_namespace TEXT NOT NULL DEFAULT 'default',
+  semantic_scope TEXT NOT NULL DEFAULT 'legacy-unscoped',
   cache_key TEXT NOT NULL,
   prompt TEXT NOT NULL,
   response JSONB NOT NULL,
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS cache_records (
 );
 CREATE INDEX IF NOT EXISTS cache_records_tenant_idx ON cache_records (tenant_id);
 CREATE INDEX IF NOT EXISTS cache_records_tenant_namespace_idx ON cache_records (tenant_id, cache_namespace);
+CREATE INDEX IF NOT EXISTS cache_records_scope_idx ON cache_records (tenant_id, cache_namespace, semantic_scope);
 CREATE TABLE IF NOT EXISTS usage_events (
   id BIGSERIAL PRIMARY KEY,
   tenant_id TEXT NOT NULL,

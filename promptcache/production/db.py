@@ -32,6 +32,7 @@ class CacheRecord(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(255), index=True)
     cache_namespace: Mapped[str] = mapped_column(String(255), index=True, default='default')
+    semantic_scope: Mapped[str] = mapped_column(String(64), index=True, default='legacy-unscoped')
     cache_key: Mapped[str] = mapped_column(String(128), index=True)
     prompt: Mapped[str] = mapped_column(Text)
     response: Mapped[dict] = mapped_column(JSONB)
@@ -125,6 +126,8 @@ def initialize_database() -> None:
             conn.execute(text('CREATE INDEX IF NOT EXISTS cache_records_expires_idx ON cache_records (expires_at)'))
             conn.execute(text('ALTER TABLE cache_records ADD COLUMN IF NOT EXISTS cache_namespace TEXT NOT NULL DEFAULT $$default$$'))
             conn.execute(text('CREATE INDEX IF NOT EXISTS cache_records_tenant_namespace_idx ON cache_records (tenant_id, cache_namespace)'))
+            conn.execute(text('ALTER TABLE cache_records ADD COLUMN IF NOT EXISTS semantic_scope TEXT NOT NULL DEFAULT $$legacy-unscoped$$'))
+            conn.execute(text('CREATE INDEX IF NOT EXISTS cache_records_scope_idx ON cache_records (tenant_id, cache_namespace, semantic_scope)'))
             conn.execute(text('CREATE INDEX IF NOT EXISTS usage_events_created_idx ON usage_events (created_at)'))
             conn.execute(text('ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS baseline_provider TEXT'))
             conn.execute(text('''CREATE TABLE IF NOT EXISTS daily_usage_rollups (
