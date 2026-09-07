@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 import re
 from typing import Any
+from .scope_extractors import extract_references
 
 
 SCOPE_VERSION = 2
@@ -117,7 +118,10 @@ def resolve_semantic_scope(messages: list[dict[str, Any]]) -> SemanticScope:
     references = _references(text)
     filters = _filters(text)
     if not references and _has_unknown_named_entity(text, references):
-        return SemanticScope(None, operation, references, filters, 'unresolved_named_entity')
+        extracted = extract_references(text)
+        if extracted is None:
+            return SemanticScope(None, operation, references, filters, 'unresolved_named_entity')
+        references = extracted.references
     descriptor = {
         'version': SCOPE_VERSION,
         'operation': operation,
