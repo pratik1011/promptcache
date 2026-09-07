@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 
-SCOPE_VERSION = 1
+SCOPE_VERSION = 2
 
 REFERENCE_PATTERNS: dict[str, tuple[str, ...]] = {
     'source:google_docs': (r'\bgoogle\s+docs?\b', r'\bgdocs\b', r'docs\.google\.com'),
@@ -27,6 +27,20 @@ OPERATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ('extract', ('extract', 'parse', 'list')),
 )
 
+FILTER_PATTERNS: dict[str, tuple[str, ...]] = {
+    'period:annual': (r'\bannual\b', r'\byearly\b', r'\bannually\b', r'\bper\s+year\b'),
+    'period:monthly': (r'\bmonthly\b', r'\bper\s+month\b'),
+    'period:quarterly': (r'\bquarterly\b', r'\bper\s+quarter\b'),
+    'period:weekly': (r'\bweekly\b', r'\bper\s+week\b'),
+    'period:daily': (r'\bdaily\b', r'\bper\s+day\b'),
+    'metric:budget': (r'\bbudget\b',),
+    'metric:revenue': (r'\brevenue\b',),
+    'metric:spend': (r'\bspend\b', r'\bspending\b'),
+    'metric:cost': (r'\bcost\b', r'\bcosts\b'),
+    'metric:headcount': (r'\bheadcount\b', r'\bemployees\b'),
+    'metric:hiring': (r'\bhiring\b', r'\bhires\b', r'\bjobs\b'),
+}
+
 COMMON_CAPITALIZED_WORDS = frozenset({
     'A', 'An', 'And', 'Are', 'Can', 'Create', 'Explain', 'Find', 'For', 'How',
     'I', 'In', 'Is', 'It', 'List', 'Please', 'Prepare', 'Search', 'Show', 'The',
@@ -39,6 +53,7 @@ class SemanticScope:
     fingerprint: str | None
     operation: str
     references: tuple[str, ...]
+    filters: tuple[str, ...]
     reason: str
 
     @property
@@ -68,6 +83,21 @@ def _references(text: str) -> tuple[str, ...]:
     return tuple(sorted(found))
 
 
+def _filters(text: str) -> tuple[str, ...]:
+    lowered = text.lower()
+    found = {
+        identifier
+        for identifier, patterns in FILTER_PATTERNS.items()
+        if any(re.search(pattern, lowered) for pattern in patterns)
+    }
+    for token in re.findall(r'\b\d+(?:\.\d+)?\b', lowered):
+        if len(token) == 4 and token.isdigit() and 1900 <= int(token) <= 2100:
+            found.add(f'year:{token}')
+        else:
+            found.add(f'number:{token}')
+    return tuple(sorted(found))
+
+
 def _has_unknown_named_entity(text: str, references: tuple[str, ...]) -> bool:
     known = set()
     for reference in references:
@@ -85,12 +115,14 @@ def resolve_semantic_scope(messages: list[dict[str, Any]]) -> SemanticScope:
     text = _message_text(messages)
     operation = _operation(text)
     references = _references(text)
+    filters = _filters(text)
     if not references and _has_unknown_named_entity(text, references):
-        return SemanticScope(None, operation, references, 'unresolved_named_entity')
+        return SemanticScope(None, operation, references, filters, 'unresolved_named_entity')
     descriptor = {
         'version': SCOPE_VERSION,
         'operation': operation,
         'references': references,
+        'filters': filters,
     }
     encoded = json.dumps(descriptor, separators=(',', ':'), sort_keys=True).encode()
-    return SemanticScope(sha256(encoded).hexdigest(), operation, references, 'resolved')
+    return SemanticScope(sha256(encoded).hexdigest(), operation, references, filters, 'resolved')

@@ -31,3 +31,27 @@ def test_general_question_can_use_a_semantic_scope():
     result = scope('How does response caching reduce latency?')
     assert result.enabled
     assert result.operation == 'general'
+
+
+def test_equivalent_period_words_share_scope_for_the_same_entity_and_metric():
+    annual = scope('What is the annual budget of Google?')
+    yearly = scope('What is the yearly budget of Google?')
+    assert annual.enabled
+    assert annual.fingerprint == yearly.fingerprint
+    assert annual.filters == ('metric:budget', 'period:annual')
+
+
+def test_entity_period_and_metric_changes_produce_different_scopes():
+    annual_google = scope('What is the annual budget of Google?')
+    monthly_google = scope('What is the monthly budget of Google?')
+    annual_microsoft = scope('What is the annual budget of Microsoft?')
+    annual_revenue_google = scope('What is the annual revenue of Google?')
+    assert annual_google.fingerprint != monthly_google.fingerprint
+    assert annual_google.fingerprint != annual_microsoft.fingerprint
+    assert annual_google.fingerprint != annual_revenue_google.fingerprint
+
+
+def test_explicit_years_are_part_of_the_scope():
+    current = scope('What was the annual budget of Google in 2024?')
+    previous = scope('What was the annual budget of Google in 2023?')
+    assert current.fingerprint != previous.fingerprint
