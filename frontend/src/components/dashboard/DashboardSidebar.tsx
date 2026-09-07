@@ -16,6 +16,14 @@ const viewMarker = (view: string) => ({ Overview: 'Home', Analytics: 'Data', 'AP
 
 export default function DashboardSidebar({ workspaces, active, view, role, email, onWorkspace, onView, onLogout }: Props) {
   const views = ['Overview', 'Analytics', ...(role === 'owner' ? ['API keys'] : []), 'Settings']
+  const hasWorkspace = workspaces.length > 0
+  const openQuickstart = () => {
+    if (!hasWorkspace) {
+      window.dispatchEvent(new Event('promptcache:create-workspace'))
+      return
+    }
+    onView(role === 'owner' ? 'API keys' : 'Settings')
+  }
 
   return <aside className='app-sidebar'>
     <div className='app-brand'><Logo size={34} /><div><b>PromptCache</b><span>AI gateway</span></div></div>
@@ -27,7 +35,7 @@ export default function DashboardSidebar({ workspaces, active, view, role, email
     <nav className='app-nav' aria-label='Dashboard navigation'>
       {views.map(item => <button className={view === item ? 'active' : ''} onClick={() => onView(item)} key={item}><span>{viewMarker(item)}</span>{item}</button>)}
     </nav>
-    <div className='guide'><i>Start</i><b>Quickstart guide</b><p>Connect your first request in under five minutes.</p><button onClick={() => onView(role === 'owner' ? 'API keys' : 'Settings')}>View guide</button></div>
+    <div className='guide'><i>Start</i><b>Quickstart guide</b><p>{hasWorkspace ? 'Connect your first request in under five minutes.' : 'Create a workspace to begin configuring your gateway.'}</p><button onClick={openQuickstart}>{hasWorkspace ? 'Set up API access' : 'Create workspace'}</button></div>
     <div className='app-user'><i>{email[0].toUpperCase()}</i><div><b>{email.split('@')[0]}</b><span>{email}</span></div><button aria-label='Log out' onClick={onLogout}>Log out</button></div>
   </aside>
 }
