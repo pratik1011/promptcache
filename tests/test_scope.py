@@ -35,6 +35,14 @@ def test_model_extraction_can_scope_an_unknown_entity(monkeypatch):
     assert result.references == ('entity:acme_robotics',)
 
 
+def test_local_ner_window_keeps_long_prompts_bounded(monkeypatch):
+    from promptcache.core.scope_extractors import _candidate_window
+    monkeypatch.setenv('SCOPE_LOCAL_NER_MAX_CHARS', '400')
+    window = _candidate_window('a' * 2000 + 'Acme Robotics')
+    assert len(window) <= 430
+    assert window.endswith('Acme Robotics')
+
+
 def test_general_question_can_use_a_semantic_scope():
     result = scope('How does response caching reduce latency?')
     assert result.enabled

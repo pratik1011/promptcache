@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.request
 
 
 logger = logging.getLogger('promptcache.scope')
 _local_model = None
 _local_attempted = False
+_local_disabled_until = 0.0
 
 
 @dataclass(frozen=True)
@@ -25,9 +27,21 @@ def _slug(value: str) -> str:
     return re.sub(r'[^a-z0-9]+', '_', value.lower()).strip('_')
 
 
+def _candidate_window(text: str) -> str:
+    '''Keep local NER bounded to likely instruction/entity-bearing content.'''
+    limit = max(200, int(os.getenv('SCOPE_LOCAL_NER_MAX_CHARS', '1200')))
+    if len(text) <= limit:
+        return text
+    head = text[: limit - 200]
+    tail = text[-200:]
+    return head + '\n[long prompt omitted]\n' + tail
+
+
 def _local_extract(text: str) -> ModelExtraction | None:
-    global _local_model, _local_attempted
+    global _local_model, _local_attempted, _local_disabled_until
     if os.getenv('SCOPE_LOCAL_NER_ENABLED', '0') != '1':
+        return None
+    if time.monotonic() < _local_disabled_until:
         return None
     try:
         if not _local_attempted:
@@ -37,7 +51,15 @@ def _local_extract(text: str) -> ModelExtraction | None:
         if _local_model is None:
             return None
         labels = ['company', 'organization', 'product', 'document source', 'dataset', 'location']
-        rows = _local_model.predict_entities(text, labels, threshold=float(os.getenv('SCOPE_LOCAL_NER_THRESHOLD', '0.85')))
+        started = time.monotonic()
+        rows = _local_model.predict_entities(_candidate_window(text), labels, threshold=float(os.getenv('SCOPE_LOCAL_NER_THRESHOLD', '0.85')))
+        elapsed_ms = (time.monotonic() - started) * 1000
+        budget_ms = float(os.getenv('SCOPE_LOCAL_NER_BUDGET_MS', '500'))
+        if elapsed_ms > budget_ms:
+            cooldown = float(os.getenv('SCOPE_LOCAL_NER_COOLDOWN_SECONDS', '300'))
+            _local_disabled_until = time.monotonic() + cooldown
+            logger.warning('local scope extraction exceeded %.0f ms; bypassing it for %.0f seconds', budget_ms, cooldown)
+            return None
         values = {_slug(str(row.get('text', ''))) for row in rows if row.get('text')}
         if values:
             return ModelExtraction(tuple(f'entity:{value}' for value in sorted(values)), 0.85, 'local_ner')
